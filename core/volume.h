@@ -1,4 +1,5 @@
 #pragma once
+#include <_types/_uint32_t.h>
 #include <filesystem>
 #include <optional>
 #include <memory>
@@ -71,82 +72,113 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
+template <typename NodeType>
 class NodeReader;
+
+template <typename NodeType>
 class NodeWriter;
 
 // todo: docs, exception specs
 // todo non-copyable, non-movable
+
+// template <Tag tag>
+template <typename NodeType>
 class Node {
  public:
   using Name = std::string;
   using Path = std::vector<Name>;
-  using Ptr = std::shared_ptr<Node>;
+  using Ptr = std::shared_ptr<NodeType>;
   using List = std::vector<Ptr>;
   using Key = std::string;
   using Value = Value;
+  using Version = uint32_t;  // todo platform specific
+  using Reader = NodeReader<NodeType>;
+  using Writer = NodeWriter<NodeType>;
 
  public:
   virtual ~Node() = default;
 
-  virtual Node::Ptr AddNode(const Name& name) = 0;
-  virtual Node::Ptr GetNode(const Name& name) const = 0;
-  virtual Node::List ListNodes() const = 0;
+  virtual Ptr AddNode(const Name& name) = 0;
+  virtual Ptr GetNode(const Name& name) const = 0;
+  virtual bool RemoveNode(const Name& name) = 0;
+  virtual List ListNodes() const = 0;
+  virtual const Name& GetName() const = 0;
 
   virtual void Write(const Key& key, const Value& value) = 0;
   virtual Value Read(const Key& key) const = 0;
   virtual bool Remove(const Key& key) = 0;
 
-  virtual void Accept(NodeReader& reader) const = 0;
-  virtual void Accept(NodeWriter& writer) = 0;
+  virtual void Accept(Reader& reader) const = 0;
+  virtual void Accept(Writer& writer) = 0;
 
+  /// helpers
  public:
   template <typename T>
   void Write(const Key& key, const T& value) {
     Write(key, Value(value));
   }
 
-  static Node::Ptr FindByPath(const Node::Ptr& from, const Path& path);
+  template <typename T>
+  std::optional<T> Read(const Key& key) {
+    const auto& value_ptr = Read(key).template Try<T>();
+    if (!value_ptr) {
+      return std::nullopt;
+    }
 
-  // virtual Node* FindChild(Id id) const = 0;
+    return *value_ptr;
+  }
 
-  // virtual Value ReadValue(Key key) const = 0;
-  // virtual void WriteValue(Key key, Value&& value) = 0;
-  // virtual bool RemoveValue(Key key) = 0;
-  // virtual void Flush() = 0;
+  static Ptr FindByPath(const Ptr& from, const Path& path) {
+    auto cur = from;
+    for (const auto& name : path) {
+      if (!cur) {
+        return nullptr;
+      }
 
-  // can be VolumeNode (OverFs), or StorageNode (Virtual)
+      cur = cur->GetNode(name);
+    }
+
+    return cur;
+  }
 };
 
+class VolumeNode : public Node<VolumeNode> {
+ public:
+  virtual Version GetDataVersion() const = 0;
+  virtual Version GetNodeVersion() const = 0;  // todo can be aba
+};
+
+template <typename NodeType>
 class NodeReader {
+ public:
+  using NodeName = typename NodeType::Name;
+  using NodeValue = typename NodeType::Value;
+  using NodeKey = typename NodeType::Key;
+
  public:
   virtual ~NodeReader() = default;
 
-  virtual void OnLink(const Node::Name& self, const Node::Name& child) = 0;
-  virtual void OnData(const Node::Name& self, const Node::Key& key,
-                      const Node::Value& value) = 0;
+  virtual void OnLink(const NodeName& self, const NodeName& child) = 0;
+  virtual void OnData(const NodeName& self, const NodeName& key,
+                      const NodeValue& value) = 0;
 };
 
+template <typename NodeType>
 class NodeWriter {
  public:
+  using NodeName = typename NodeType::Name;
+  using NodeValue = typename NodeType::Value;
+  using NodeKey = typename NodeType::Key;
+
   /// @todo to avoid dynamic allocation fu2::function_view can be used
-  using LinkCallback = std::function<void(Node::Name&&)>;
-  using DataCallback = std::function<void(Node::Key&&, Node::Value&&)>;
+  using LinkCallback = std::function<void(NodeName&&)>;
+  using DataCallback = std::function<void(NodeKey&&, NodeValue&&)>;
 
  public:
   virtual ~NodeWriter() = default;
-  virtual void OnLink(const Node::Name& self, const LinkCallback& cb) = 0;
-  virtual void OnData(const Node::Name& self, const DataCallback& cb) = 0;
+  virtual void OnLink(const NodeName& self, const LinkCallback& cb) = 0;
+  virtual void OnData(const NodeName& self, const DataCallback& cb) = 0;
 };
-
-// Node::Ptr MountNode(Node::Ptr&& src);
-
-/*class Volume {
- public:
-  virtual ~Volume() = default;
-  virtual Node& GetRoot() const = 0;
-  virtual Node* FindNode(std::string_view path) const = 0;
-  virtual void Save() = 0;
-};*/
 
 class Volume {
  public:
@@ -154,11 +186,7 @@ class Volume {
 
  public:
   virtual ~Volume() = default;
-  virtual Node::Ptr Root() const = 0;
-
-  // todo move to separate utility
-  // virtual void Load(const std::filesystem::path& path);
-  // virtual void Save(const std::filesystem::path& path) const = 0;
+  virtual VolumeNode::Ptr Root() const = 0;
 
  public:
   static Volume::Ptr CreateSingleThreaded();
@@ -166,5 +194,25 @@ class Volume {
 
 void Save(const Volume& volume, const std::filesystem::path& path);
 void Load(Volume& volume, const std::filesystem::path& path);
+
+class StorageNode : public Node<StorageNode> {
+ public:
+  using Ptr = std::shared_ptr<StorageNode>;
+
+ public:
+  virtual void Mount(const VolumeNode::Ptr& node) = 0;
+};
+
+class Storage {
+ public:
+  using Ptr = std::shared_ptr<Storage>;
+
+ public:
+  virtual ~Storage() = default;
+  virtual StorageNode::Ptr MountRoot(const VolumeNode::Ptr& node) = 0;
+
+ public:
+  static Storage::Ptr CreateSingleThreaded();
+};
 
 }  // namespace jbkv
