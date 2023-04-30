@@ -1,6 +1,17 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.0)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../CMake/common.txt)
 
-project(jbkv_core)
+project(core)
+find_package(Protobuf REQUIRED)
+set(SOURCES node.proto)
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${SOURCES})
+include_directories(${PROTOBUF_INCLUDE_DIRS})
+add_library(core STATIC
+    ${SOURCES}
+    ${PROTO_SRCS}
+    ${PROTO_HDRS}
+    volume.cpp
+    volume.h
+)
 
-# add_subdirectory(storage)
-add_subdirectory(volume)
+target_link_libraries(protobuf::libprotobuf)
