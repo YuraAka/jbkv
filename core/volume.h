@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <variant>
+#include <list>
 
 namespace jbkv {
 
@@ -81,7 +82,12 @@ class NodeWriter;
 // todo: docs, exception specs
 // todo non-copyable, non-movable
 
-// template <Tag tag>
+// todo remove as base class, maybe transform to DataNode
+
+// NodeDataView <- NodeData, NodeOrderView <- NodeOrder
+// VolumeNode -> {NodeData, NodeOrder}, StorageNode -> {NodeDataView,
+// NodeOrderView}
+
 template <typename NodeType>
 class Node {
  public:
@@ -89,27 +95,19 @@ class Node {
   using Path = std::vector<Name>;
   using Ptr = std::shared_ptr<NodeType>;
   using List = std::vector<Ptr>;
-  using Key = std::string;
+  using Key = std::string;  // todo move out to global
   using Value = Value;
-  using Version = uint32_t;  // todo platform specific
   using Reader = NodeReader<NodeType>;
   using Writer = NodeWriter<NodeType>;
+  using ChildReader = std::function<void(const Name&, const Ptr&)>;
 
  public:
   virtual ~Node() = default;
 
-  virtual Ptr AddNode(const Name& name) = 0;
-  virtual Ptr GetNode(const Name& name) const = 0;
-  virtual bool RemoveNode(const Name& name) = 0;
-  virtual List ListNodes() const = 0;
-  virtual const Name& GetName() const = 0;
+  virtual void AcceptChildren(const ChildReader& reader) const = 0;
 
   virtual void Write(const Key& key, const Value& value) = 0;
   virtual Value Read(const Key& key) const = 0;
-  virtual bool Remove(const Key& key) = 0;
-
-  virtual void Accept(Reader& reader) const = 0;
-  virtual void Accept(Writer& writer) = 0;
 
   /// helpers
  public:
@@ -127,25 +125,49 @@ class Node {
 
     return *value_ptr;
   }
-
-  static Ptr FindByPath(const Ptr& from, const Path& path) {
-    auto cur = from;
-    for (const auto& name : path) {
-      if (!cur) {
-        return nullptr;
-      }
-
-      cur = cur->GetNode(name);
-    }
-
-    return cur;
-  }
 };
 
+class VolumeNodeSubscriber;
 class VolumeNode : public Node<VolumeNode> {
  public:
-  virtual Version GetDataVersion() const = 0;
-  virtual Version GetNodeVersion() const = 0;  // todo can be aba
+  using SubscriberWeakPtr = std::weak_ptr<VolumeNodeSubscriber>;
+  using UniqueId = std::string;  // todo use uuid
+
+ public:
+  /// todo rename to GetOrAddChild
+  /// @brief Retrieve child node by name or create new if not exists
+  virtual Ptr ObtainChild(const Name& name) = 0;
+  virtual Ptr TryChild(const Name& name) const = 0;
+  virtual const UniqueId& GetId() const = 0;
+  virtual const Name& GetName() const = 0;
+
+  /// @brief Remove child by name
+  /// @return true if deletion was successful, false in case of child absence
+  virtual bool DropChild(const Name& name) = 0;  // todo remove child
+
+  /// todo remove for more generic
+  virtual void Accept(Reader& reader) const = 0;
+  virtual void Accept(Writer& writer) = 0;
+
+  virtual void Subscribe(const SubscriberWeakPtr& subscriber) = 0;
+
+  virtual bool Remove(const Key& key) = 0;
+};
+
+class VolumeNodeSubscriber {
+ public:
+  virtual ~VolumeNodeSubscriber() = default;
+  virtual bool OnChildAdd(const VolumeNode& parent,
+                          const VolumeNode::Ptr& child) = 0;
+
+  virtual bool OnChildDrop(const VolumeNode& parent,
+                           const VolumeNode::Ptr& node) = 0;
+
+  virtual bool OnKeyAdd(const VolumeNode& owner,
+                        const VolumeNode::Key& key) = 0;
+
+  virtual bool OnKeyRemove(const VolumeNode& owner,
+                           const VolumeNode::Key& key) = 0;
 };
 
 template <typename NodeType>
@@ -195,12 +217,24 @@ class Volume {
 void Save(const Volume& volume, const std::filesystem::path& path);
 void Load(Volume& volume, const std::filesystem::path& path);
 
+/// @note Storage node cannot modify set of keys and children on mounted
+/// hierarchy, it can change values only
 class StorageNode : public Node<StorageNode> {
  public:
   using Ptr = std::shared_ptr<StorageNode>;
+  using WeakPtr = std::weak_ptr<StorageNode>;
 
  public:
+  /// todo VolumeNodeView -- to prevent modifications
   virtual void Mount(const VolumeNode::Ptr& node) = 0;
+
+  // todo make just NodeId
+  virtual void Unmount(const VolumeNode::Ptr& node) = 0;
+
+  /// @brief Tries to creates new storage node child
+  /// @return new storage node if there is a match in mounted hierarchy, nullptr
+  /// otherwise
+  virtual Ptr TryChild(const Name& name) = 0;
 };
 
 class Storage {
@@ -209,6 +243,7 @@ class Storage {
 
  public:
   virtual ~Storage() = default;
+  /// todo just get root
   virtual StorageNode::Ptr MountRoot(const VolumeNode::Ptr& node) = 0;
 
  public:
