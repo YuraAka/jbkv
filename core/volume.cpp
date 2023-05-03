@@ -18,28 +18,6 @@ namespace {
 using namespace jbkv;
 using namespace std::string_literals;
 
-/// concurent adding kv to list
-// - write value by key
-// - key is not exist
-// - ? get strong-ptr on table ?
-// - ? copy table value by value ?
-//    - problem with scalars
-
-/// concurent changing value (string)
-// - add to intrusive linked list (lock free)
-// - switch raw pointer in table
-// - unlink old (it dies when all clients finish working with it)
-/// concurrent changing value (scalar)
-// - just atomic store
-/// string value remove: change current value to special tombstone value
-// - do not delete tombstone in case of rewrite
-// - do not store tombstone in dump
-/// scalar value remove
-// - additional flag inside value "tombstone" ??? how update?
-//  - 1. given: key with tombstone flag
-//  - 2. store value (maybe another thread also stored, or deleted)
-//  - 3. exchange tombstone
-
 class StVolumeNode final : public VolumeNode {
  public:
   explicit StVolumeNode(const std::string& name)
