@@ -14,8 +14,9 @@ namespace jbkv {
 
 class Value {
  public:
-  /// todo fill another types
-  using Data = std::variant<std::monostate, uint32_t, std::string>;
+  using Data = std::variant<std::monostate, bool, char, unsigned char, uint16_t,
+                            int16_t, uint32_t, int32_t, uint64_t, int64_t,
+                            float, double, std::string>;
 
   Value()
       : data_(std::monostate()) {
@@ -29,6 +30,7 @@ class Value {
   Value(const Value& data) = default;
   Value& operator=(Value&& value) = default;
   Value& operator=(const Value& value) = default;
+  // todo explicit operator bool ??
 
   template <typename T>
   const T& As() const {
@@ -58,6 +60,10 @@ class Value {
     std::visit(visitor, data_);
   }
 
+  static Value NotSet() {
+    return {};
+  }
+
  private:
   Data data_;
 };
@@ -66,6 +72,7 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   value.Accept([&os](const auto& data) {
     using T = std::decay_t<decltype(data)>;
     if constexpr (std::is_same_v<T, std::monostate>) {
+      os << "<not-set>";
     } else {
       os << data;
     }
@@ -73,22 +80,15 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
-template <typename NodeType>
-class NodeReader;
-
-template <typename NodeType>
-class NodeWriter;
-
 // todo: docs, exception specs
 // todo non-copyable, non-movable
-
-// todo remove as base class, maybe transform to DataNode
-
 class NodeData {
  public:
   using Key = std::string;
   using Value = Value;
   using Ptr = std::shared_ptr<NodeData>;
+  using List = std::vector<Ptr>;
+  using Reader = std::function<void(const Key&, const Value&)>;
 
  public:
   virtual ~NodeData() = default;
@@ -96,6 +96,8 @@ class NodeData {
   virtual Value Read(const Key& key) const = 0;
   virtual void Write(const Key& key, const Value& value) = 0;
   virtual bool Remove(const Key& key) = 0;
+
+  virtual void Accept(const Reader& reader) const = 0;
 
   /// helpers
  public:
@@ -106,7 +108,8 @@ class NodeData {
 
   template <typename T>
   std::optional<T> Read(const Key& key) {
-    const auto& value_ptr = Read(key).template Try<T>();
+    const auto value = Read(key);
+    const auto* value_ptr = value.template Try<T>();
     if (!value_ptr) {
       return std::nullopt;
     }
@@ -132,7 +135,7 @@ class Node {
 
   /// @brief Searches node by name amoung children
   /// @return nullptr if node is not found, otherwise pointer to node
-  virtual Node::Ptr Find(const Name& name) = 0;
+  virtual Node::Ptr Find(const Name& name) const = 0;
 
   /// @brief Removes link to child node by name
   /// @return false if no child is found by given name, otherwise true
@@ -140,26 +143,13 @@ class Node {
   virtual bool Unlink(const Name& name) = 0;
 
   /// @return name of current node
-  virtual const Name& GetName() = 0;
+  virtual const Name& GetName() const = 0;
 
   /// @brief Retrieves data for current node
   virtual NodeData::Ptr Open() const = 0;
 };
 
 class VolumeNode : public Node<VolumeNode> {};
-
-class Volume : public VolumeNode {
- public:
-  using Ptr = std::shared_ptr<Volume>;
-
- public:
-  virtual ~Volume() = default;
-
- public:
-  static Volume::Ptr CreateLockBased();
-};
-
-/// =================================== Storage ================================
 
 class StorageNode : public Node<StorageNode> {
  public:
@@ -182,50 +172,6 @@ class StorageNode : public Node<StorageNode> {
   virtual Ptr Mount(const VolumeNode::Ptr& node) = 0;
 };
 
-class Storage : public StorageNode {
- public:
-  using Ptr = std::shared_ptr<Storage>;
-
- public:
-  virtual ~Storage() = default;
-
- public:
-  static Storage::Ptr CreateLockBased();
-};
-
-/// =================================== Save & load ===========================
-template <typename NodeType>
-class NodeReader {
- public:
-  using NodeName = typename NodeType::Name;
-  using NodeValue = typename NodeType::Value;
-  using NodeKey = typename NodeType::Key;
-
- public:
-  virtual ~NodeReader() = default;
-
-  virtual void OnLink(const NodeName& self, const NodeName& child) = 0;
-  virtual void OnData(const NodeName& self, const NodeName& key,
-                      const NodeValue& value) = 0;
-};
-
-template <typename NodeType>
-class NodeWriter {
- public:
-  using NodeName = typename NodeType::Name;
-  using NodeValue = typename NodeType::Value;
-  using NodeKey = typename NodeType::Key;
-
-  /// @todo to avoid dynamic allocation fu2::function_view can be used
-  using LinkCallback = std::function<void(NodeName&&)>;
-  using DataCallback = std::function<void(NodeKey&&, NodeValue&&)>;
-
- public:
-  virtual ~NodeWriter() = default;
-  virtual void OnLink(const NodeName& self, const LinkCallback& cb) = 0;
-  virtual void OnData(const NodeName& self, const DataCallback& cb) = 0;
-};
-
-void Save(const Volume& volume, const std::filesystem::path& path);
-void Load(Volume& volume, const std::filesystem::path& path);
+VolumeNode::Ptr CreateVolume();
+StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
 }  // namespace jbkv

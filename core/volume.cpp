@@ -5,6 +5,7 @@
 #include <exception>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <format>
 #include <type_traits>
@@ -13,75 +14,18 @@
 #include <variant>
 #include <vector>
 #include <list>
+#include <shared_mutex>
+// todo clear includes
 
 namespace {
 using namespace jbkv;
 using namespace std::string_literals;
 
-class StVolumeNode final : public VolumeNode {
+const auto kRootName = "/"s;
+
+class VolumeNodeData final : public NodeData {
  public:
-  explicit StVolumeNode(const std::string& name)
-      : name_(name) {
-  }
-
-  const UniqueId& GetId() const override {
-    /// TODO: todo change to unique id
-    return name_;
-  }
-
-  const Name& GetName() const override {
-    return name_;
-  }
-
-  Ptr ObtainChild(const std::string& name) override {
-    auto& child = children_[name];
-    if (child) {
-      return child;
-    }
-
-    child = std::make_shared<StVolumeNode>(name);
-    Notify([this, &child](auto& subscriber) {
-      return subscriber.OnChildAdd(*this, child);
-    });
-
-    return child;
-  }
-
-  Ptr TryChild(const Name& name) const override {
-    auto it = children_.find(name);
-    if (it == children_.end()) {
-      return nullptr;
-    }
-
-    return it->second;
-  }
-
-  bool DropChild(const Name& name) override {
-    auto child = TryChild(name);
-    if (child) {
-      children_.erase(name);
-
-      Notify([this, &child](auto& subscriber) {
-        return subscriber.OnChildDrop(*this, child);
-      });
-
-      return true;
-    }
-
-    return false;
-  }
-
-  void AcceptChildren(const ChildReader& reader) const override {
-    for (const auto& [name, node] : children_) {
-      reader(name, node);
-    }
-  }
-
-  void Write(const Key& key, const Value& value) override {
-    data_[key] = value;
-  }
-
-  Value Read(const Key& key) const override {
+  Value Read(const Key& key) const {
     const auto it = data_.find(key);
     if (it == data_.end()) {
       return {};
@@ -90,7 +34,11 @@ class StVolumeNode final : public VolumeNode {
     return it->second;
   }
 
-  bool Remove(const Key& key) override {
+  void Write(const Key& key, const Value& value) {
+    data_[key] = value;
+  }
+
+  bool Remove(const Key& key) {
     const auto it = data_.find(key);
     if (it == data_.end() || !it->second.Has()) {
       return false;
@@ -100,373 +48,294 @@ class StVolumeNode final : public VolumeNode {
     return true;
   }
 
-  void Accept(Reader& reader) const override {
-    for (const auto& [name, _] : children_) {
-      reader.OnLink(name_, name);
-    }
-
+  void Accept(const Reader& reader) const {
     for (const auto& [key, value] : data_) {
       if (value.Has()) {
-        reader.OnData(name_, key, value);
-      }
-    }
-  }
-
-  void Accept(Writer& writer) override {
-    writer.OnLink(name_, [this](auto&& child_name) {
-      auto& child = children_[child_name];
-      child = std::make_shared<StVolumeNode>(std::move(child_name));
-    });
-
-    /// if changed, call subscriber
-    writer.OnData(name_, [this](auto&& key, auto&& value) {
-      data_[std::move(key)] = std::move(value);
-    });
-  }
-
-  void Subscribe(const SubscriberWeakPtr& subscriber) override {
-    subscribers_.insert(subscribers_.end(), subscriber);
-  }
-
- private:
-  using Change = std::function<bool(VolumeNodeSubscriber&)>;
-
-  void Notify(const Change& on_change) {
-    auto it = subscribers_.begin();
-    while (it != subscribers_.end()) {
-      auto subscriber = it->lock();
-      if (!subscriber || !on_change(*subscriber)) {
-        subscribers_.erase(it++);
+        reader(key, value);
       }
     }
   }
 
  private:
-  std::string name_;
-  std::unordered_map<Name, Node::Ptr> children_;
   std::unordered_map<Key, Value> data_;
-  std::list<SubscriberWeakPtr> subscribers_;
 };
 
-class StVolume final : public Volume {
+class StorageNodeData final : public NodeData {
  public:
-  StVolume()
-      : root_(std::make_shared<StVolumeNode>("root")) {
+  explicit StorageNodeData(NodeData::List&& links)
+      : links_(std::move(links)),
+        key_map_(CreateKeyMap(links_)) {
+    assert(!links_.empty());
   }
 
  public:
-  VolumeNode::Ptr Root() const override {
-    return root_;
+  Value Read(const Key& key) const override {
+    auto it = key_map_.find(key);
+    if (it != key_map_.end()) {
+      return it->second->Read(key);
+    }
+
+    return links_.back()->Read(key);
   }
 
- private:
-  VolumeNode::Ptr root_;
-};
-
-class FsSaver final : public VolumeNode::Reader {
- public:
-  explicit FsSaver(const std::filesystem::path& path) {
-    std::cout << "Saving to " << path << std::endl;
-  }
-
-  void OnLink(const NodeName& parent, const NodeName& child) override {
-    std::cout << "Saving parent-child: " << parent << "->" << child
-              << std::endl;
-  }
-
-  void OnData(const NodeName& name, const NodeKey& key,
-              const Value& value) override {
-    std::cout << "- saving node '" << name << "', " << key << " = " << value
-              << std::endl;
-  }
-};
-
-class FsLoader final : public VolumeNode::Writer {
- public:
-  explicit FsLoader(const std::filesystem::path& path)
-      : hierarchy_{{"root", {"d1", "d2"}}, {"d1", {"d3", "d4"}}},
-        data_{{"d1", {{"k1", "v1"}, {"k2", "v2"}}},
-              {"d4", {{"k3", "v3"}, {"k4", "v4"}}}} {
-    std::cout << "Loading from " << path << std::endl;
-  }
-
-  void OnData(const NodeName& self, const DataCallback& cb) {
-    auto dit = data_.find(self);
-    if (dit != data_.end()) {
-      for (auto&& [key, value] : dit->second) {
-        Value val(std::move(value));
-        cb(std::move(key), std::move(val));
-      }
+  void Write(const Key& key, const Value& value) override {
+    auto it = key_map_.find(key);
+    if (it != key_map_.end()) {
+      it->second->Write(key, value);
+    } else {
+      // new key scenario -- write to last node
+      links_.back()->Write(key, value);
     }
   }
 
-  void OnLink(const NodeName& self, const LinkCallback& cb) {
-    auto hit = hierarchy_.find(self);
-    if (hit != hierarchy_.end()) {
-      for (auto&& child_name : hit->second) {
-        cb(std::move(child_name));
+  bool Remove(const Key& key) override {
+    auto it = key_map_.find(key);
+    if (it != key_map_.end()) {
+      return it->second->Remove(key);
+    }
+
+    return false;
+  }
+
+  void Accept(const Reader& reader) const override {
+    for (const auto& [key, node] : key_map_) {
+      const auto value = node->Read(key);
+      if (value.Has()) {
+        reader(key, value);
       }
     }
   }
 
  private:
-  using NodeHierarchy = std::vector<std::string>;
-  using Hierarchy = std::unordered_map<std::string, NodeHierarchy>;
-  using KvList = std::vector<std::pair<std::string, std::string>>;
-  using Data = std::unordered_map<std::string, KvList>;
+  using KeyNodeMap = std::unordered_map<Key, NodeData*>;
 
-  Hierarchy hierarchy_;
-  Data data_;
+  static KeyNodeMap CreateKeyMap(const NodeData::List& links) {
+    /// greedy cache keys for not locking subsequent reads/writes
+    KeyNodeMap result;
+    for (const auto& link : links) {
+      link->Accept([&result, &link](const auto& key, const auto& value) {
+        auto& node = result[key];
+        if (!node) {
+          node = link.get();
+        }
+      });
+    }
+
+    return result;
+  }
+
+ private:
+  const NodeData::List links_;
+  const KeyNodeMap key_map_;
 };
 
-template <typename NodeType, typename U>
-void Accept(const std::shared_ptr<NodeType>& root, U& visitor) {
-  std::deque<typename NodeType::Ptr> nodes{root};
-  while (!nodes.empty()) {
-    auto node = nodes.front();
-    nodes.pop_front();
-    node->Accept(visitor);
-
-    node->AcceptChildren([&nodes](const auto& name, const auto& node) {
-      nodes.push_back(node);
-    });
-  }
-}
-
-// todo: where inherit from to prevent misuse?
-class StStorageNode final : public StorageNode,
-                            public VolumeNodeSubscriber,
-                            public std::enable_shared_from_this<StStorageNode> {
+class ThreadSafeData final : public NodeData {
  public:
-  explicit StStorageNode(const VolumeNode::Ptr& node)
-      : name_(node->GetName()) {
-    Mount(node);
+  explicit ThreadSafeData(NodeData::Ptr&& impl)
+      : impl_(std::move(impl)) {
   }
 
-  /// StorageNode interface
+  Value Read(const Key& key) const {
+    std::shared_lock lock(mutex_);
+    return impl_->Read(key);
+  }
+
+  void Write(const Key& key, const Value& value) {
+    std::lock_guard lock(mutex_);
+    return impl_->Write(key, value);
+  }
+
+  bool Remove(const Key& key) {
+    std::lock_guard lock(mutex_);
+    return impl_->Remove(key);
+  }
+
+  void Accept(const Reader& reader) const {
+    std::shared_lock lock(mutex_);
+    impl_->Accept(reader);
+  }
+
  public:
-  void Mount(const VolumeNode::Ptr& node) override {
-    /**
-     Mount behaves lazily: in that call it only fills up mount-structures to
-     register links to volume nodes. Further work will be done on actual access
-     to concrete node. It lets optimize time and space for this operation
-     because volume tree can be too big and actual accesses to its nodes thru
-     storage hierarchy can be too small
-     */
-    if (mount_map_.contains(node->GetId())) {
-      return;
+  static NodeData::Ptr Wrap(NodeData::Ptr&& data) {
+    return std::make_shared<ThreadSafeData>(std::move(data));
+  }
+
+ private:
+  mutable std::shared_mutex mutex_;
+  NodeData::Ptr impl_;
+};
+
+class ThreadSafeNode final : public VolumeNode {
+ public:
+  explicit ThreadSafeNode(VolumeNode::Ptr&& impl)
+      : impl_(std::move(impl)) {
+  }
+
+  Node::Ptr Create(const Name& name) {
+    std::lock_guard lock(mutex_);
+    return Wrap(impl_->Create(name));
+  }
+
+  Node::Ptr Find(const Name& name) const {
+    std::shared_lock lock(mutex_);
+    return Wrap(impl_->Find(name));
+  }
+
+  bool Unlink(const Name& name) {
+    std::lock_guard lock(mutex_);
+    return impl_->Unlink(name);
+  }
+
+  const Name& GetName() const {
+    return impl_->GetName();
+  }
+
+  NodeData::Ptr Open() const {
+    std::shared_lock lock(mutex_);
+    return ThreadSafeData::Wrap(impl_->Open());
+  }
+
+ public:
+  static VolumeNode::Ptr Wrap(VolumeNode::Ptr&& node) {
+    if (!node) {
+      return nullptr;
     }
 
-    auto it = mount_links_.insert(mount_links_.end(), node);
-    mount_map_[node->GetId()] = it;
+    return std::make_shared<ThreadSafeNode>(std::move(node));
   }
 
-  void Unmount(const VolumeNode::Ptr& node) override {
-    /**
-      Unmount is called in two cases:
-      1. client explicitly unmounts previously mounted node
-      2. there was a deletion in volume hierarchy that notifies storage
-      hierarchy about that
+ private:
+  mutable std::shared_mutex mutex_;
+  VolumeNode::Ptr impl_;
+};
 
-      In either cases Unmount has to recursively remove mount-links to volume
-      hierarchy down to unmounted node and that storage nodes which don't
-      contain any links.
-     */
-
-    UnmountRecursively(this, node);
-  }
-
-  /// Node interface
+class VolumeNodeImpl final : public VolumeNode {
  public:
-  StorageNode::Ptr TryChild(const Name& name) override {
-    if (mount_links_.empty()) {
-      throw std::runtime_error("node is not mounted with any volume");
-    }
+  explicit VolumeNodeImpl(const Name& name)
+      : name_(name),
+        data_(std::make_shared<VolumeNodeData>()) {
+  }
 
+  const Name& GetName() const override {
+    return name_;
+  }
+
+  Ptr Create(const Name& name) override {
     auto& child = children_[name];
     if (child) {
       return child;
     }
 
-    for (const auto& link : mount_links_) {
-      link->Subscribe(weak_from_this());
-    }
-
-    for (const auto& link : mount_links_) {
-      auto child_link = link->TryChild(name);
-      if (!child_link) {
-        continue;
-      }
-
-      if (!child) {
-        child = std::make_shared<StStorageNode>(child_link);
-      } else {
-        child->Mount(child_link);
-      }
-    }
-
+    child = std::make_shared<VolumeNodeImpl>(name);
     return child;
   }
 
-  const Name& GetName() const {
+  Ptr Find(const Name& name) const override {
+    auto it = children_.find(name);
+    if (it == children_.end()) {
+      return nullptr;
+    }
+
+    return it->second;
+  }
+
+  bool Unlink(const Name& name) override {
+    return children_.erase(name) == 1u;
+  }
+
+  NodeData::Ptr Open() const override {
+    return data_;
+  }
+
+ private:
+  const Name name_;
+  const NodeData::Ptr data_;
+
+  std::unordered_map<Name, Node::Ptr> children_;
+};
+
+class StorageNodeImpl final : public StorageNode {
+ public:
+  StorageNodeImpl(const Name& name, VolumeNode::List&& links)
+      : name_(name),
+        links_(std::move(links)) {
+  }
+
+  /// StorageNode interface
+ public:
+  StorageNode::Ptr Mount(const VolumeNode::Ptr& node) override {
+    auto links = links_;
+    links.push_back(node);
+    const auto& child_name = links.back()->GetName();
+    return std::make_shared<StorageNodeImpl>(child_name, std::move(links));
+  }
+
+  /// Node interface
+ public:
+  const Name& GetName() const override {
     return name_;
   }
 
-  void AcceptChildren(const ChildReader& reader) const override {
-    for (const auto& [name, child] : children_) {
-      reader(name, child);
-    }
-  }
-
-  void Write(const Key& key, const Value& value) override {
-    // search where to write?
-    // make key -> node mapping at the moment of mount
-    // OR search key linearly by all nodes, if not found, write to primary
-  }
-
-  Value Read(const Key& key) const override {
-    // same as write OR read until found
-    return {};
-  }
-
-  /// VolumeNodeSubscriber
- public:
-  bool OnChildAdd(const VolumeNode& vparent,
-                  const VolumeNode::Ptr& vchild) override {
-    if (!mount_map_.contains(vparent.GetId())) {
-      return false;
+  Ptr Create(const Name& name) override {
+    auto child = Find(name);
+    if (child) {
+      return child;
     }
 
-    auto& schild = children_[vchild->GetName()];
-    if (!schild) {
-      schild = std::make_shared<StStorageNode>(vchild);
-    }
-
-    return true;
+    auto link = links_.front()->Create(name);
+    VolumeNode::List children_links = {std::move(link)};
+    return std::make_shared<StorageNodeImpl>(name, std::move(children_links));
   }
 
-  bool OnChildDrop(const VolumeNode& vparent,
-                   const VolumeNode::Ptr& vchild) override {
-    if (!mount_map_.contains(vparent.GetId())) {
-      return false;
+  Ptr Find(const Name& name) const override {
+    VolumeNode::List children_links;
+    children_links.reserve(links_.size());
+    for (const auto& link : links_) {
+      auto child = link->Find(name);
+      if (child) {
+        children_links.push_back(std::move(child));
+      }
     }
 
-    auto it = children_.find(vchild->GetName());
-    if (it == children_.end()) {
-      return true;
+    if (children_links.empty()) {
+      return nullptr;
     }
 
-    struct PairedNode {
-      StorageNode::Ptr snode;
-      VolumeNode::Ptr vnode;
-    };
-
-    std::deque<PairedNode> nodes{{it->second, vchild}};
-    while (!nodes.empty()) {
-      auto paired = nodes.front();
-      nodes.pop_front();
-      paired.snode->Unmount(paired.vnode);
-      auto collect = [&paired, &nodes](const auto& name, const auto& schild) {
-        auto vchild = paired.vnode->TryChild(name);
-        if (vchild) {
-          nodes.push_back({schild, vchild});
-        }
-      };
-
-      paired.snode->AcceptChildren(collect);
-    }
-
-    return true;
+    return std::make_shared<StorageNodeImpl>(name, std::move(children_links));
   }
 
-  bool OnKeyAdd(const VolumeNode& owner, const VolumeNode::Key& key) override {
-    return mount_map_.contains(owner.GetId());
+  bool Unlink(const Name& name) override {
+    bool result = false;
+    for (const auto& link : links_) {
+      result = link->Unlink(name) || result;
+    }
 
-    /// todo
+    return result;
   }
 
-  bool OnKeyRemove(const VolumeNode& owner,
-                   const VolumeNode::Key& key) override {
-    return mount_map_.contains(owner.GetId());
-    // todo
+  NodeData::Ptr Open() const override {
+    NodeData::List link_data;
+    link_data.reserve(links_.size());
+    for (const auto& link : links_) {
+      link_data.push_back(link->Open());
+    }
+
+    return std::make_shared<StorageNodeData>(std::move(link_data));
   }
 
  private:
-  /// @return true if no mounts is remained
-  bool UnmountSelf(const VolumeNode::Ptr& node) {
-    auto it = mount_map_.find(node->GetId());
-    if (it != mount_map_.end()) {
-      mount_links_.erase(it->second);
-      mount_map_.erase(it);
-    }
-
-    return mount_links_.empty();
-  }
-
-  void UnmountRecursively(StStorageNode* sroot, const VolumeNode::Ptr& vroot) {
-    struct NodePair {
-      StStorageNode* snode = nullptr;
-      VolumeNode::Ptr vnode;
-    };
-
-    std::deque<NodePair> nodes{{sroot, vroot}};
-    while (!nodes.empty()) {
-      auto paired = nodes.front();
-      nodes.pop_front();
-      for (const auto& [name, schild] : paired.snode->children_) {
-        auto vchild = paired.vnode->TryChild(name);
-        if (vchild) {
-          nodes.push_back({schild.get(), vchild});
-        }
-      }
-
-      if (paired.snode->UnmountSelf(paired.vnode)) {
-        /// TODO: remove from parent
-      }
-    }
-  }
-
- private:
-  using VolumeNodeList = std::list<VolumeNode::Ptr>;
-  using StStorageNodePtr = std::shared_ptr<StStorageNode>;
-
   const Name name_;
-  VolumeNodeList mount_links_;
-  std::unordered_map<VolumeNode::UniqueId, VolumeNodeList::iterator> mount_map_;
-  std::unordered_map<StorageNode::Name, StStorageNodePtr> children_;
-};
-
-class StStorage final : public Storage {
- public:
-  StorageNode::Ptr MountRoot(const VolumeNode::Ptr& node) override {
-    // todo in ctor
-    if (!root_) {
-      root_ = std::make_shared<StStorageNode>(node);
-    }
-
-    return root_;
-  }
-
- private:
-  StorageNode::Ptr root_;
+  const VolumeNode::List links_;
 };
 
 }  // namespace
 
-Volume::Ptr Volume::CreateSingleThreaded() {
-  return std::make_shared<StVolume>();
+VolumeNode::Ptr jbkv::CreateVolume() {
+  auto root = std::make_shared<VolumeNodeImpl>(kRootName);
+  return ThreadSafeNode::Wrap(std::move(root));
 }
 
-void jbkv::Save(const Volume& volume, const std::filesystem::path& path) {
-  FsSaver saver(path);
-  Accept(volume.Root(), saver);
-}
-
-void jbkv::Load(Volume& volume, const std::filesystem::path& path) {
-  FsLoader loader(path);
-  Accept(volume.Root(), loader);
-}
-
-Storage::Ptr Storage::CreateSingleThreaded() {
-  return std::make_shared<StStorage>();
+StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
+  VolumeNode::List nodes{node};
+  return std::make_shared<StorageNodeImpl>(kRootName, std::move(nodes));
 }
