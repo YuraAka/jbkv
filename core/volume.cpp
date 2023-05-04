@@ -1,7 +1,4 @@
 #include "volume.h"
-#include "node.pb.h"
-#include <google/protobuf/io/zero_copy_stream_impl.h>
-#include <google/protobuf/message_lite.h>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -19,13 +16,13 @@
 
 namespace {
 using namespace jbkv;
-using namespace std::string_literals;
 
-const auto kRootName = "/"s;
+const std::string kRootName = "/";
 
 class VolumeNodeData final : public NodeData {
  public:
   Value Read(const Key& key) const {
+    std::shared_lock lock(mutex_);
     const auto it = data_.find(key);
     if (it == data_.end()) {
       return {};
@@ -35,10 +32,12 @@ class VolumeNodeData final : public NodeData {
   }
 
   void Write(const Key& key, const Value& value) {
+    std::lock_guard lock(mutex_);
     data_[key] = value;
   }
 
   bool Remove(const Key& key) {
+    std::shared_lock lock(mutex_);
     const auto it = data_.find(key);
     if (it == data_.end() || !it->second.Has()) {
       return false;
@@ -49,6 +48,7 @@ class VolumeNodeData final : public NodeData {
   }
 
   void Accept(const Reader& reader) const {
+    std::shared_lock lock(mutex_);
     for (const auto& [key, value] : data_) {
       if (value.Has()) {
         reader(key, value);
@@ -57,6 +57,7 @@ class VolumeNodeData final : public NodeData {
   }
 
  private:
+  mutable std::shared_mutex mutex_;
   std::unordered_map<Key, Value> data_;
 };
 
@@ -75,7 +76,7 @@ class StorageNodeData final : public NodeData {
       return it->second->Read(key);
     }
 
-    return links_.back()->Read(key);
+    return PriorityLink().Read(key);
   }
 
   void Write(const Key& key, const Value& value) override {
@@ -84,7 +85,7 @@ class StorageNodeData final : public NodeData {
       it->second->Write(key, value);
     } else {
       // new key scenario -- write to last node
-      links_.back()->Write(key, value);
+      PriorityLink().Write(key, value);
     }
   }
 
@@ -94,7 +95,7 @@ class StorageNodeData final : public NodeData {
       return it->second->Remove(key);
     }
 
-    return false;
+    return PriorityLink().Remove(key);
   }
 
   void Accept(const Reader& reader) const override {
@@ -109,10 +110,14 @@ class StorageNodeData final : public NodeData {
  private:
   using KeyNodeMap = std::unordered_map<Key, NodeData*>;
 
+  NodeData& PriorityLink() const {
+    return *links_.back();
+  }
+
   static KeyNodeMap CreateKeyMap(const NodeData::List& links) {
-    /// greedy cache keys for not locking subsequent reads/writes
     KeyNodeMap result;
-    for (const auto& link : links) {
+    for (auto it = links.rbegin(); it != links.rend(); ++it) {
+      const auto& link = *it;
       link->Accept([&result, &link](const auto& key, const auto& value) {
         auto& node = result[key];
         if (!node) {
@@ -129,86 +134,6 @@ class StorageNodeData final : public NodeData {
   const KeyNodeMap key_map_;
 };
 
-class ThreadSafeData final : public NodeData {
- public:
-  explicit ThreadSafeData(NodeData::Ptr&& impl)
-      : impl_(std::move(impl)) {
-  }
-
-  Value Read(const Key& key) const {
-    std::shared_lock lock(mutex_);
-    return impl_->Read(key);
-  }
-
-  void Write(const Key& key, const Value& value) {
-    std::lock_guard lock(mutex_);
-    return impl_->Write(key, value);
-  }
-
-  bool Remove(const Key& key) {
-    std::lock_guard lock(mutex_);
-    return impl_->Remove(key);
-  }
-
-  void Accept(const Reader& reader) const {
-    std::shared_lock lock(mutex_);
-    impl_->Accept(reader);
-  }
-
- public:
-  static NodeData::Ptr Wrap(NodeData::Ptr&& data) {
-    return std::make_shared<ThreadSafeData>(std::move(data));
-  }
-
- private:
-  mutable std::shared_mutex mutex_;
-  NodeData::Ptr impl_;
-};
-
-class ThreadSafeNode final : public VolumeNode {
- public:
-  explicit ThreadSafeNode(VolumeNode::Ptr&& impl)
-      : impl_(std::move(impl)) {
-  }
-
-  Node::Ptr Create(const Name& name) {
-    std::lock_guard lock(mutex_);
-    return Wrap(impl_->Create(name));
-  }
-
-  Node::Ptr Find(const Name& name) const {
-    std::shared_lock lock(mutex_);
-    return Wrap(impl_->Find(name));
-  }
-
-  bool Unlink(const Name& name) {
-    std::lock_guard lock(mutex_);
-    return impl_->Unlink(name);
-  }
-
-  const Name& GetName() const {
-    return impl_->GetName();
-  }
-
-  NodeData::Ptr Open() const {
-    std::shared_lock lock(mutex_);
-    return ThreadSafeData::Wrap(impl_->Open());
-  }
-
- public:
-  static VolumeNode::Ptr Wrap(VolumeNode::Ptr&& node) {
-    if (!node) {
-      return nullptr;
-    }
-
-    return std::make_shared<ThreadSafeNode>(std::move(node));
-  }
-
- private:
-  mutable std::shared_mutex mutex_;
-  VolumeNode::Ptr impl_;
-};
-
 class VolumeNodeImpl final : public VolumeNode {
  public:
   explicit VolumeNodeImpl(const Name& name)
@@ -221,6 +146,7 @@ class VolumeNodeImpl final : public VolumeNode {
   }
 
   Ptr Create(const Name& name) override {
+    std::lock_guard lock(mutex_);
     auto& child = children_[name];
     if (child) {
       return child;
@@ -231,6 +157,7 @@ class VolumeNodeImpl final : public VolumeNode {
   }
 
   Ptr Find(const Name& name) const override {
+    std::shared_lock lock(mutex_);
     auto it = children_.find(name);
     if (it == children_.end()) {
       return nullptr;
@@ -240,6 +167,7 @@ class VolumeNodeImpl final : public VolumeNode {
   }
 
   bool Unlink(const Name& name) override {
+    std::lock_guard lock(mutex_);
     return children_.erase(name) == 1u;
   }
 
@@ -251,6 +179,7 @@ class VolumeNodeImpl final : public VolumeNode {
   const Name name_;
   const NodeData::Ptr data_;
 
+  mutable std::shared_mutex mutex_;
   std::unordered_map<Name, Node::Ptr> children_;
 };
 
@@ -266,7 +195,7 @@ class StorageNodeImpl final : public StorageNode {
   StorageNode::Ptr Mount(const VolumeNode::Ptr& node) override {
     auto links = links_;
     links.push_back(node);
-    const auto& child_name = links.back()->GetName();
+    const auto& child_name = PriorityLink().GetName();
     return std::make_shared<StorageNodeImpl>(child_name, std::move(links));
   }
 
@@ -282,7 +211,7 @@ class StorageNodeImpl final : public StorageNode {
       return child;
     }
 
-    auto link = links_.front()->Create(name);
+    auto link = PriorityLink().Create(name);
     VolumeNode::List children_links = {std::move(link)};
     return std::make_shared<StorageNodeImpl>(name, std::move(children_links));
   }
@@ -324,6 +253,11 @@ class StorageNodeImpl final : public StorageNode {
   }
 
  private:
+  VolumeNode& PriorityLink() const {
+    return *links_.back();
+  }
+
+ private:
   const Name name_;
   const VolumeNode::List links_;
 };
@@ -331,8 +265,7 @@ class StorageNodeImpl final : public StorageNode {
 }  // namespace
 
 VolumeNode::Ptr jbkv::CreateVolume() {
-  auto root = std::make_shared<VolumeNodeImpl>(kRootName);
-  return ThreadSafeNode::Wrap(std::move(root));
+  return std::make_shared<VolumeNodeImpl>(kRootName);
 }
 
 StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {

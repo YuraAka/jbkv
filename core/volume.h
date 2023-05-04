@@ -166,9 +166,8 @@ class StorageNode : public Node<StorageNode> {
   /// - child creation makes a new Storage node mounted with all co-named
   /// children nodes of mounted trees if any, or force create new child node in
   /// some mounted volume node
-  /// - node data joins all node data of corresponding Volume nodes, key
-  /// priority is on last mounted nodes
-  /// - key binding fixed on the moment of operation (write/read/remove)
+  /// - node data joins all node data of mounted Volume nodes, key
+  /// priority is on last mounted nodes (fresh layer)
   virtual Ptr Mount(const VolumeNode::Ptr& node) = 0;
 };
 

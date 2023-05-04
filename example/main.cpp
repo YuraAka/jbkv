@@ -12,6 +12,8 @@ void Example1() {
   auto d = b->Open();
   d->Write("key", "value");
   std::cout << "key: " << d->Read("key") << std::endl;
+
+  // do unit tests with coverage
 }
 
 void StorageExample() {
