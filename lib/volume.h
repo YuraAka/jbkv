@@ -9,14 +9,16 @@
 #include <vector>
 #include <variant>
 #include <list>
+#include <iomanip>
 
 namespace jbkv {
 
 class Value {
  public:
+  using Blob = std::vector<uint8_t>;
   using Data = std::variant<std::monostate, bool, char, unsigned char, uint16_t,
                             int16_t, uint32_t, int32_t, uint64_t, int64_t,
-                            float, double, std::string>;
+                            float, double, std::string, Blob>;
 
   Value()
       : data_(std::monostate()) {
@@ -53,7 +55,7 @@ class Value {
   }
 
   bool Has() const {
-    return std::get_if<0>(&data_) == nullptr;
+    return data_.index() != 0;
   }
 
   void Accept(const auto& visitor) const {
@@ -70,9 +72,16 @@ class Value {
 
 inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   value.Accept([&os](const auto& data) {
-    using T = std::decay_t<decltype(data)>;
+    using T = std::remove_cvref_t<decltype(data)>;
     if constexpr (std::is_same_v<T, std::monostate>) {
       os << "<not-set>";
+    } else if constexpr (std::is_same_v<T, Value::Blob>) {
+      os << std::hex;
+      for (const auto byte : data) {
+        os << byte;
+      }
+
+      os << std::resetiosflags(std::ios_base::basefield);
     } else {
       os << data;
     }
@@ -118,12 +127,12 @@ class NodeData {
   }
 };
 
-template <typename NodeType>
+template <typename NodeFamily>
 class Node {
  public:
   using Name = std::string;
   using Path = std::vector<Name>;
-  using Ptr = std::shared_ptr<NodeType>;
+  using Ptr = std::shared_ptr<NodeFamily>;
   using List = std::vector<Ptr>;
 
  public:
@@ -173,4 +182,8 @@ class StorageNode : public Node<StorageNode> {
 
 VolumeNode::Ptr CreateVolume();
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
+
+void Save(const VolumeNode::Ptr& root, const std::filesystem::path& path);
+// void Load(VolumeNode& root, const std::filesystem::path& path);
+
 }  // namespace jbkv
