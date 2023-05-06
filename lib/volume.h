@@ -13,27 +13,8 @@
 
 namespace jbkv {
 
-// todo impl
-// check for a copy
-template <typename T>
-class Referenced {
- public:
-  Referenced() = default;
-  explicit Referenced(T&& data)
-      : data_(std::make_shared<T>(std::move(data))) {
-  }
-
-  explicit operator T() const {
-    return data_ ? *data_ : T();
-  }
-
- private:
-  std::shared_ptr<T> data_;
-};
-
 class Value {
  public:
-  /// Referenced<Blob>, Referenced<std::string>
   using Blob = std::vector<uint8_t>;
   using Data = std::variant<std::monostate, bool, char, unsigned char, uint16_t,
                             int16_t, uint32_t, int32_t, uint64_t, int64_t,
