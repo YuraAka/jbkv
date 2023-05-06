@@ -22,7 +22,7 @@ const std::string kRootName = "/";
 
 class VolumeNodeData final : public NodeData {
  public:
-  Value Read(const Key& key) const {
+  Value Read(const Key& key) const override {
     std::shared_lock lock(mutex_);
     const auto it = data_.find(key);
     if (it == data_.end()) {
@@ -32,12 +32,12 @@ class VolumeNodeData final : public NodeData {
     return it->second;
   }
 
-  void Write(const Key& key, const Value& value) {
+  void Write(const Key& key, Value&& value) override {
     std::lock_guard lock(mutex_);
-    data_[key] = value;
+    data_[key] = std::move(value);
   }
 
-  bool Remove(const Key& key) {
+  bool Remove(const Key& key) override {
     std::shared_lock lock(mutex_);
     const auto it = data_.find(key);
     if (it == data_.end() || !it->second.Has()) {
@@ -48,13 +48,17 @@ class VolumeNodeData final : public NodeData {
     return true;
   }
 
-  void Accept(const Reader& reader) const {
+  KeyValueList Enumerate() const override {
     std::shared_lock lock(mutex_);
+    KeyValueList result;
+    result.reserve(data_.size());
     for (const auto& [key, value] : data_) {
       if (value.Has()) {
-        reader(key, value);
+        result.push_back({key, value});
       }
     }
+
+    return result;
   }
 
  private:
@@ -80,13 +84,13 @@ class StorageNodeData final : public NodeData {
     return PriorityLink().Read(key);
   }
 
-  void Write(const Key& key, const Value& value) override {
+  void Write(const Key& key, Value&& value) override {
     auto it = key_map_.find(key);
     if (it != key_map_.end()) {
-      it->second->Write(key, value);
+      it->second->Write(key, std::move(value));
     } else {
       // new key scenario -- write to last node
-      PriorityLink().Write(key, value);
+      PriorityLink().Write(key, std::move(value));
     }
   }
 
@@ -99,13 +103,9 @@ class StorageNodeData final : public NodeData {
     return PriorityLink().Remove(key);
   }
 
-  void Accept(const Reader& reader) const override {
-    for (const auto& [key, node] : key_map_) {
-      const auto value = node->Read(key);
-      if (value.Has()) {
-        reader(key, value);
-      }
-    }
+  KeyValueList Enumerate() const override {
+    /// todo
+    return {};
   }
 
  private:
@@ -119,12 +119,12 @@ class StorageNodeData final : public NodeData {
     KeyNodeMap result;
     for (auto it = links.rbegin(); it != links.rend(); ++it) {
       const auto& link = *it;
-      link->Accept([&result, &link](const auto& key, const auto& value) {
+      for (auto&& [key, value] : link->Enumerate()) {
         auto& node = result[key];
-        if (!node) {
+        if (node == nullptr) {
           node = link.get();
         }
-      });
+      }
     }
 
     return result;
@@ -174,6 +174,17 @@ class VolumeNodeImpl final : public VolumeNode {
 
   NodeData::Ptr Open() const override {
     return data_;
+  }
+
+  List Enumerate() const override {
+    std::shared_lock lock(mutex_);
+    List result;
+    result.reserve(children_.size());
+    for (const auto& [_, child] : children_) {
+      result.push_back(child);
+    }
+
+    return result;
   }
 
  private:
@@ -243,6 +254,11 @@ class StorageNodeImpl final : public StorageNode {
     return result;
   }
 
+  List Enumerate() const override {
+    /// todo support
+    return {};
+  }
+
   NodeData::Ptr Open() const override {
     NodeData::List link_data;
     link_data.reserve(links_.size());
@@ -264,9 +280,6 @@ class StorageNodeImpl final : public StorageNode {
 };
 
 enum class FormatMarker : uint8_t {
-  Name = 0,
-  Data = 1,
-  Child = 2,
   Bool = 3,
   Char = 4,
   UChar = 5,
@@ -279,44 +292,10 @@ enum class FormatMarker : uint8_t {
   Float = 12,
   Double = 13,
   String = 14,
-  Blob = 15
+  Blob = 15,
 };
 
 /// todo catch error on compilation
-template <typename Type>
-FormatMarker TypeToMarker() {
-  if constexpr (std::is_same_v<Type, bool>) {
-    return FormatMarker::Bool;
-  } else if constexpr (std::is_same_v<Type, char>) {
-    return FormatMarker::Char;
-  } else if constexpr (std::is_same_v<Type, unsigned char>) {
-    return FormatMarker::UChar;
-  } else if constexpr (std::is_same_v<Type, uint16_t>) {
-    return FormatMarker::UInt16;
-  } else if constexpr (std::is_same_v<Type, int16_t>) {
-    return FormatMarker::Int16;
-  } else if constexpr (std::is_same_v<Type, uint32_t>) {
-    return FormatMarker::UInt32;
-  } else if constexpr (std::is_same_v<Type, int32_t>) {
-    return FormatMarker::Int32;
-  } else if constexpr (std::is_same_v<Type, uint64_t>) {
-    return FormatMarker::UInt64;
-  } else if constexpr (std::is_same_v<Type, int64_t>) {
-    return FormatMarker::Int64;
-  } else if constexpr (std::is_same_v<Type, float>) {
-    return FormatMarker::Float;
-  } else if constexpr (std::is_same_v<Type, double>) {
-    return FormatMarker::Double;
-  } else if constexpr (std::is_same_v<Type, std::string>) {
-    return FormatMarker::String;
-  } else if constexpr (std::is_same_v<Type, Value::Blob>) {
-    return FormatMarker::Blob;
-  } else {
-    throw std::runtime_error("Unknown type" + std::string(typeid(Type).name()));
-  }
-}
-
-/// todo make limitations for len of string & blob
 
 constexpr uint8_t kFormatVersion = 1;
 constexpr std::string_view kMagic = "jbkv";
@@ -327,8 +306,10 @@ void SerializeHeader(std::ostream& out) {
             sizeof(kFormatVersion));
 }
 
-void DeserializeHeader(std::string& value, std::istream& in) {
-  /// todo
+void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
+  magic.resize(kMagic.size());
+  in.read(&magic[0], magic.size());
+  in.read(reinterpret_cast<char*>(&version), sizeof(version));
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
@@ -371,6 +352,167 @@ void Deserialize(T& value, std::istream& in) {
   in.read(reinterpret_cast<char*>(&value), sizeof(value));
 }
 
+void Serialize(std::monostate, std::ostream&) {
+  assert(false && "unreachable");
+}
+
+template <typename T>
+constexpr bool kAlwaysFalse = false;
+
+void Serialize(const Value& value, std::ostream& out) {
+  value.Accept([&out](const auto& data) {
+    using Type = std::remove_cvref_t<decltype(data)>;
+    if constexpr (std::is_same_v<Type, bool>) {
+      Serialize(FormatMarker::Bool, out);
+    } else if constexpr (std::is_same_v<Type, char>) {
+      Serialize(FormatMarker::Char, out);
+    } else if constexpr (std::is_same_v<Type, unsigned char>) {
+      Serialize(FormatMarker::UChar, out);
+    } else if constexpr (std::is_same_v<Type, uint16_t>) {
+      Serialize(FormatMarker::UInt16, out);
+    } else if constexpr (std::is_same_v<Type, int16_t>) {
+      Serialize(FormatMarker::Int16, out);
+    } else if constexpr (std::is_same_v<Type, uint32_t>) {
+      Serialize(FormatMarker::UInt32, out);
+    } else if constexpr (std::is_same_v<Type, int32_t>) {
+      Serialize(FormatMarker::Int32, out);
+    } else if constexpr (std::is_same_v<Type, uint64_t>) {
+      Serialize(FormatMarker::UInt64, out);
+    } else if constexpr (std::is_same_v<Type, int64_t>) {
+      Serialize(FormatMarker::Int64, out);
+    } else if constexpr (std::is_same_v<Type, float>) {
+      Serialize(FormatMarker::Float, out);
+    } else if constexpr (std::is_same_v<Type, double>) {
+      Serialize(FormatMarker::Double, out);
+    } else if constexpr (std::is_same_v<Type, std::string>) {
+      Serialize(FormatMarker::String, out);
+    } else if constexpr (std::is_same_v<Type, Value::Blob>) {
+      Serialize(FormatMarker::Blob, out);
+    } else if constexpr (std::is_same_v<Type, std::monostate>) {
+      return;
+    } else {
+      static_assert(kAlwaysFalse<Type>, "unknown type");
+    }
+
+    Serialize(data, out);
+  });
+}
+
+void Deserialize(Value& value, std::istream& in) {
+  FormatMarker marker;
+  Deserialize(marker, in);
+  switch (marker) {
+    case FormatMarker::Bool: {
+      bool data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Char: {
+      char data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::UChar: {
+      unsigned char data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::UInt16: {
+      uint16_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Int16: {
+      int16_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::UInt32: {
+      uint32_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Int32: {
+      int32_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::UInt64: {
+      uint64_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Int64: {
+      int64_t data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Float: {
+      float data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Double: {
+      double data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::String: {
+      std::string data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    case FormatMarker::Blob: {
+      Value::Blob data = {};
+      Deserialize(data, in);
+      value = Value(data);
+      break;
+    }
+    default:
+      throw std::runtime_error("Unknown type marker: " +
+                               std::to_string(static_cast<uint8_t>(marker)));
+  };
+}
+
+template <typename T>
+  requires(std::is_same_v<T, std::string> || std::is_same_v<T, Value::Blob>)
+void CheckSum(const T& value, uint8_t& checksum) {
+  for (const auto c : value) {
+    checksum ^= c;
+  }
+}
+
+template <typename T>
+  requires std::is_scalar_v<T>
+void CheckSum(T value, uint8_t& checksum) {
+  for (size_t i = 0; i < sizeof(value); ++i) {
+    checksum ^= *(reinterpret_cast<uint8_t*>(&value) + i);
+  }
+}
+
+/// todo think about how to avoid monostate handling?
+void CheckSum(std::monostate, uint8_t&) {
+  assert(false && "unreachable");
+}
+
+void CheckSum(const Value& value, uint8_t checksum) {
+  value.Accept([&checksum](const auto& data) {
+    CheckSum(data, checksum);
+  });
+}
+
 class VolumeSaver {
  public:
   explicit VolumeSaver(const std::filesystem::path& path)
@@ -380,32 +522,33 @@ class VolumeSaver {
     }
 
     SerializeHeader(stream_);
+    /// todo calc check sum after each node
   }
 
-  ~VolumeSaver() {
-    stream_.close();
-  }
+ public:
+  void OnNode(const VolumeNode& node, auto& descendants) {
+    auto children = node.Enumerate();
+    uint8_t checksum = 0;
+    Serialize(children.size(), stream_);
+    for (auto&& child : std::move(children)) {
+      const auto& name = child->GetName();
+      Serialize(name, stream_);
+      CheckSum(name, checksum);
+      descendants.push_back(std::move(child));
+    }
 
-  void OnNode(const VolumeNode::Name& name) {
-    Serialize(FormatMarker::Name, stream_);
-    Serialize(name, stream_);
-    Serialize(FormatMarker::Data, stream_);
-  }
+    const auto data = node.Open();
+    const auto kv_list = data->Enumerate();
+    Serialize(kv_list.size(), stream_);
+    for (const auto& [key, value] : kv_list) {
+      Serialize(key, stream_);
+      Serialize(value, stream_);
 
-  void OnData(const NodeData::Key& key, const NodeData::Value& value) {
-    Serialize(key, stream_);
-    value.Accept([this](const auto& typed_value) {
-      using Type = std::remove_cvref_t<decltype(typed_value)>;
-      if constexpr (!std::is_same_v<Type, std::monostate>) {
-        const auto marker = TypeToMarker<Type>();
-        Serialize(marker, stream_);
-        Serialize(typed_value, stream_);
-      }
-    });
-  }
+      CheckSum(key, checksum);
+      CheckSum(value, checksum);
+    }
 
-  void OnChild(const VolumeNode::Name& name) {
-    (void)name;
+    Serialize(checksum, stream_);
   }
 
  private:
@@ -417,16 +560,46 @@ class VolumeLoader {
   explicit VolumeLoader(const std::filesystem::path& path)
       : stream_(path, std::ios_base::binary) {
     std::string magic;
-    Deserialize(magic, stream_);
+    uint8_t version = 0;
+    DeserializeHeader(magic, version, stream_);
     if (magic != kMagic) {
-      throw std::runtime_error("Unknown file format");
+      throw std::runtime_error("Bad file format, magic mismatch: " + magic);
     }
 
-    uint16_t version = 0;
-    Deserialize(version, stream_);
-    if (version != kFormatVersion) {
-      throw std::runtime_error("File version is not supported: " +
-                               std::to_string(version));
+    if (version > kFormatVersion) {
+      throw std::runtime_error("File version is too new. Update program!");
+    }
+  }
+
+  void OnNode(VolumeNode& node, auto& descendants) {
+    uint8_t checksum = 0;
+    size_t children_count = 0;
+    Deserialize(children_count, stream_);
+    for (size_t i = 0; i < children_count; ++i) {
+      VolumeNode::Name name;
+      Deserialize(name, stream_);
+      CheckSum(name, checksum);
+      auto child = node.Create(name);
+      descendants.push_back(std::move(child));
+    }
+
+    auto data = node.Open();
+    size_t kv_size = 0;
+    Deserialize(kv_size, stream_);
+    for (size_t i = 0; i < kv_size; ++i) {
+      NodeData::Key key;
+      NodeData::Value value;
+      Deserialize(key, stream_);
+      Deserialize(value, stream_);
+      data->Write(key, std::move(value));
+      CheckSum(key, checksum);
+      CheckSum(value, checksum);
+    }
+
+    uint8_t actual_checksum = 0;
+    Deserialize(actual_checksum, stream_);
+    if (checksum != actual_checksum) {
+      throw std::runtime_error("File corrupted");
     }
   }
 
@@ -435,20 +608,12 @@ class VolumeLoader {
 };
 
 template <typename Visitor>
-void Accept(const VolumeNode::Ptr& root, Visitor&& visitor) {
+void Traverse(const VolumeNode::Ptr& root, Visitor&& visitor) {
   std::deque<VolumeNode::Ptr> nodes{root};
   while (!nodes.empty()) {
     auto node = nodes.front();
     nodes.pop_front();
-    visitor.OnNode(node->GetName());
-    node->Open()->Accept([&visitor](const auto& key, const auto& value) {
-      visitor.OnData(key, value);
-    });
-
-    /*node->Accept([&nodes, &visitor](const auto& node) {
-      visitor.OnChild(node->GetName());
-      nodes.push_back(node);
-    });*/
+    visitor.OnNode(*node, nodes);
   }
 }
 
@@ -466,10 +631,11 @@ StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
 void jbkv::Save(const VolumeNode::Ptr& root,
                 const std::filesystem::path& path) {
   VolumeSaver saver(path);
-  Accept(root, saver);
+  Traverse(root, saver);
 }
 
-/*void jbkv::Load(VolumeNode& volume, const std::filesystem::path& path) {
-  FsLoader loader(path);
-  Accept(volume.Root(), loader);
-}*/
+void jbkv::Load(const VolumeNode::Ptr& root,
+                const std::filesystem::path& path) {
+  VolumeLoader loader(path);
+  Traverse(root, loader);
+}

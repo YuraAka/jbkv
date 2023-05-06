@@ -69,13 +69,28 @@ void Example3() {
   d->Write("nop", 123);
   d->Remove("nop");
 
+  auto c1 = v->Create("child1");
+  c1->Open()->Write("my name", "child-1");
+  auto c2 = c1->Create("child2");
+  c2->Open()->Write("my name", "child-2");
   Save(v, "saved.bin");
+}
+
+void Example4() {
+  auto v2 = CreateVolume();
+  Load(v2, "saved.bin");
+
+  std::cout << "string: " << v2->Open()->Read("string") << std::endl;
+  std::cout << "c2 name: "
+            << v2->Find("child1")->Find("child2")->Open()->Read("my name")
+            << std::endl;
 }
 
 int main() {
   Example1();
   Example2();
   Example3();
+  Example4();
 
   return 0;
 }

@@ -13,26 +13,36 @@
 
 namespace jbkv {
 
+// todo impl
+// check for a copy
+template <typename T>
+class Referenced {
+ public:
+  Referenced() = default;
+  explicit Referenced(T&& data)
+      : data_(std::make_shared<T>(std::move(data))) {
+  }
+
+  explicit operator T() const {
+    return data_ ? *data_ : T();
+  }
+
+ private:
+  std::shared_ptr<T> data_;
+};
+
 class Value {
  public:
+  /// Referenced<Blob>, Referenced<std::string>
   using Blob = std::vector<uint8_t>;
   using Data = std::variant<std::monostate, bool, char, unsigned char, uint16_t,
                             int16_t, uint32_t, int32_t, uint64_t, int64_t,
                             float, double, std::string, Blob>;
 
-  Value()
-      : data_(std::monostate()) {
-  }
-
+  Value() = default;
   explicit Value(Data&& data)
       : data_(std::move(data)) {
   }
-
-  Value(Value&& data) = default;
-  Value(const Value& data) = default;
-  Value& operator=(Value&& value) = default;
-  Value& operator=(const Value& value) = default;
-  // todo explicit operator bool ??
 
   template <typename T>
   const T& As() const {
@@ -89,24 +99,26 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
+class NodeDataWriter {};
+
 // todo: docs, exception specs
 // todo non-copyable, non-movable
 class NodeData {
  public:
   using Key = std::string;
   using Value = Value;
+  using KeyValueList = std::vector<std::pair<Key, Value>>;
   using Ptr = std::shared_ptr<NodeData>;
   using List = std::vector<Ptr>;
-  using Reader = std::function<void(const Key&, const Value&)>;
 
  public:
   virtual ~NodeData() = default;
 
   virtual Value Read(const Key& key) const = 0;
-  virtual void Write(const Key& key, const Value& value) = 0;
+  virtual void Write(const Key& key, Value&& value) = 0;
   virtual bool Remove(const Key& key) = 0;
 
-  virtual void Accept(const Reader& reader) const = 0;
+  virtual KeyValueList Enumerate() const = 0;
 
   /// helpers
  public:
@@ -151,6 +163,9 @@ class Node {
   /// @note node remains alive until last strong link on it
   virtual bool Unlink(const Name& name) = 0;
 
+  /// @brief List children nodes
+  virtual List Enumerate() const = 0;
+
   /// @return name of current node
   virtual const Name& GetName() const = 0;
 
@@ -159,7 +174,6 @@ class Node {
 };
 
 class VolumeNode : public Node<VolumeNode> {};
-
 class StorageNode : public Node<StorageNode> {
  public:
   /// @brief Links current node with subtree with root in given node
@@ -184,6 +198,6 @@ VolumeNode::Ptr CreateVolume();
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
 
 void Save(const VolumeNode::Ptr& root, const std::filesystem::path& path);
-// void Load(VolumeNode& root, const std::filesystem::path& path);
+void Load(const VolumeNode::Ptr& root, const std::filesystem::path& path);
 
 }  // namespace jbkv
