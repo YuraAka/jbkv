@@ -13,6 +13,7 @@
 #include <list>
 #include <shared_mutex>
 #include <iostream>
+#include <codecvt>
 // todo clear includes
 
 namespace {
@@ -104,8 +105,18 @@ class StorageNodeData final : public NodeData {
   }
 
   KeyValueList Enumerate() const override {
-    /// todo
-    return {};
+    KeyValueList result;
+    for (const auto& [key, node] : key_map_) {
+      result.push_back({key, node->Read(key)});
+    }
+
+    for (auto&& [key, value] : PriorityLink().Enumerate()) {
+      if (!key_map_.contains(key)) {
+        result.push_back({std::move(key), std::move(value)});
+      }
+    }
+
+    return result;
   }
 
  private:
@@ -255,8 +266,22 @@ class StorageNodeImpl final : public StorageNode {
   }
 
   List Enumerate() const override {
-    /// todo support
-    return {};
+    std::unordered_map<Name, VolumeNode::List> name_groups;
+    for (const auto& link : links_) {
+      for (auto&& child : link->Enumerate()) {
+        const auto& name = child->GetName();
+        name_groups[name].push_back(std::move(child));
+      }
+    }
+
+    List result;
+    result.reserve(name_groups.size());
+    for (auto&& [name, links] : name_groups) {
+      auto child = std::make_shared<StorageNodeImpl>(name, std::move(links));
+      result.push_back(std::move(child));
+    }
+
+    return result;
   }
 
   NodeData::Ptr Open() const override {
@@ -280,6 +305,9 @@ class StorageNodeImpl final : public StorageNode {
 };
 
 enum class FormatMarker : uint8_t {
+  Double = 0,
+  String = 1,
+  Blob = 2,
   Bool = 3,
   Char = 4,
   UChar = 5,
@@ -289,13 +317,8 @@ enum class FormatMarker : uint8_t {
   Int32 = 9,
   UInt64 = 10,
   Int64 = 11,
-  Float = 12,
-  Double = 13,
-  String = 14,
-  Blob = 15,
+  Float = 12
 };
-
-/// todo catch error on compilation
 
 constexpr uint8_t kFormatVersion = 1;
 constexpr std::string_view kMagic = "jbkv";
@@ -313,8 +336,6 @@ void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
-  /// todo ensure string is utf-8 decoded for all platforms (Windows
-  /// especially)
   uint64_t size = value.size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
   out.write(value.data(), size);
@@ -517,12 +538,9 @@ class VolumeSaver {
  public:
   explicit VolumeSaver(const std::filesystem::path& path)
       : stream_(path, std::ios_base::binary) {
-    if (!stream_) {
-      throw std::runtime_error("Cannot open file '{}'" + std::string(path));
-    }
-
+    auto locale = std::locale(stream_.getloc(), new std::codecvt_utf8<wchar_t>);
+    stream_.imbue(locale);
     SerializeHeader(stream_);
-    /// todo calc check sum after each node
   }
 
  public:
@@ -559,6 +577,13 @@ class VolumeLoader {
  public:
   explicit VolumeLoader(const std::filesystem::path& path)
       : stream_(path, std::ios_base::binary) {
+    if (!stream_) {
+      throw std::runtime_error("Cannot open file '{}'" + std::string(path));
+    }
+
+    auto locale = std::locale(stream_.getloc(), new std::codecvt_utf8<wchar_t>);
+    stream_.imbue(locale);
+
     std::string magic;
     uint8_t version = 0;
     DeserializeHeader(magic, version, stream_);

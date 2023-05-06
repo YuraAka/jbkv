@@ -64,7 +64,7 @@ void Example3() {
   d->Write("uin64", 1000456ul);
   d->Write("float", 23.567f);
   d->Write("double", 1234.567678);
-  d->Write("string", "hello world");
+  d->Write("string", "Ю");
   d->Write("blob", Value::Blob{1, 2, 3, 4});
   d->Write("nop", 123);
   d->Remove("nop");
@@ -86,11 +86,20 @@ void Example4() {
             << std::endl;
 }
 
+void Example5() {
+  auto v = CreateVolume();
+  std::string data;
+  std::cin >> data;
+  v->Open()->Write("data", data);
+  Save(v, "test.bin");
+}
+
 int main() {
-  Example1();
+  /*Example1();
   Example2();
   Example3();
-  Example4();
+  Example4();*/
+  Example5();
 
   return 0;
 }
