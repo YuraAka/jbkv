@@ -1,5 +1,4 @@
 #pragma once
-#include <_types/_uint32_t.h>
 #include <filesystem>
 #include <optional>
 #include <memory>
@@ -106,6 +105,10 @@ class NodeData {
   template <typename T>
   void Write(const Key& key, const T& value) {
     Write(key, Value(value));
+  }
+
+  void Write(const Key& key, const char* value) {
+    Write(key, Value(std::string(value)));
   }
 
   template <typename T>

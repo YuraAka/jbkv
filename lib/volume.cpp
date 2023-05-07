@@ -4,7 +4,6 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <format>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,6 +13,10 @@
 #include <shared_mutex>
 #include <iostream>
 #include <codecvt>
+#include <sstream>
+#include <deque>
+#include <assert.h>
+#include <stdexcept>
 // todo clear includes
 
 namespace {
@@ -164,7 +167,7 @@ class VolumeNodeImpl final : public VolumeNode {
       return child;
     }
 
-    child = std::make_shared<VolumeNodeImpl>(name);
+    child.reset(new VolumeNodeImpl(name));
     return child;
   }
 
@@ -344,6 +347,7 @@ void Serialize(const std::string& value, std::ostream& out) {
 void Deserialize(std::string& value, std::istream& in) {
   uint64_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
+
   value.resize(size);
   in.read(&value[0], size);
 }
@@ -538,8 +542,11 @@ class VolumeSaver {
  public:
   explicit VolumeSaver(const std::filesystem::path& path)
       : stream_(path, std::ios_base::binary) {
-    auto locale = std::locale(stream_.getloc(), new std::codecvt_utf8<wchar_t>);
-    stream_.imbue(locale);
+    if (!stream_.is_open()) {
+      throw std::runtime_error("Cannot open file for writing: " +
+                               path.string());
+    }
+
     SerializeHeader(stream_);
   }
 
@@ -577,12 +584,10 @@ class VolumeLoader {
  public:
   explicit VolumeLoader(const std::filesystem::path& path)
       : stream_(path, std::ios_base::binary) {
-    if (!stream_) {
-      throw std::runtime_error("Cannot open file '{}'" + std::string(path));
+    if (!stream_.is_open()) {
+      throw std::runtime_error("Cannot open file for reading: " +
+                               path.string());
     }
-
-    auto locale = std::locale(stream_.getloc(), new std::codecvt_utf8<wchar_t>);
-    stream_.imbue(locale);
 
     std::string magic;
     uint8_t version = 0;

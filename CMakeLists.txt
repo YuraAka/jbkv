@@ -1,13 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 
 project(jbkv)
-if(MSVC)
-  # Treat warnings as errors on MSVC
-  add_compile_options(/W4 /WX)
-else()
-  # Treat warnings as errors on other compilers
-  add_compile_options(-Werror)
-endif()
+# Treat warnings as errors on other compilers
+add_compile_options(-Werror)
 set(CMAKE_CXX_STANDARD 20)
 
 # set(CMAKE_CACHEFILE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cache)

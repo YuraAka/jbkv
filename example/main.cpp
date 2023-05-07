@@ -1,5 +1,8 @@
 #include <iostream>
 #include "lib/volume.h"
+#include <clocale>
+#include <fstream>
+#include <codecvt>
 
 using namespace jbkv;
 
@@ -94,12 +97,27 @@ void Example5() {
   Save(v, "test.bin");
 }
 
+void Example6() {
+  auto v = CreateVolume();
+  v->Open()->Write("text", "Юра");
+  Save(v, "node.bin");
+}
+
+void Example7() {
+  auto v = CreateVolume();
+  Load(v, "node.bin");
+  std::cout << (v->Open()->Read("text").As<std::string>() == "Юра")
+            << std::endl;
+}
+
 int main() {
   /*Example1();
   Example2();
   Example3();
-  Example4();*/
-  Example5();
+  Example4();
+  Example5();*/
+  Example6();
+  Example7();
 
   return 0;
 }
