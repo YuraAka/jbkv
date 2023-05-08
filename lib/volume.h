@@ -24,6 +24,10 @@ class Value {
       : data_(std::move(data)) {
   }
 
+  explicit Value(const char* data)
+      : data_(std::string(data)) {
+  }
+
   template <typename T>
   const T& As() const {
     auto data_ptr = Try<T>();
@@ -79,8 +83,6 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
-class NodeDataWriter {};
-
 // todo: docs, exception specs
 // todo non-copyable, non-movable
 class NodeData {
@@ -105,10 +107,6 @@ class NodeData {
   template <typename T>
   void Write(const Key& key, const T& value) {
     Write(key, Value(value));
-  }
-
-  void Write(const Key& key, const char* value) {
-    Write(key, Value(std::string(value)));
   }
 
   template <typename T>
@@ -140,6 +138,7 @@ class Node {
 
   /// @brief Searches node by name amoung children
   /// @return nullptr if node is not found, otherwise pointer to node
+  /// todo wrap to optional, do not spread nullptrs on code
   virtual Node::Ptr Find(const Name& name) const = 0;
 
   /// @brief Removes link to child node by name
@@ -158,25 +157,28 @@ class Node {
 };
 
 class VolumeNode : public Node<VolumeNode> {};
+
+/// Represents a virtual node that maps on some Volume nodes
+/// Mapping is done either by mounting some volume nodes or by linking children
+/// of mounted node
+/// Structure of node has layered structure where bottom layers consists of
+/// co-named children, and upper layers built from mount-points to current node
+/// Layers are fixed at the moment of node materialization and stays constant
+/// for all node life
+/// Materialization is happening on node Create/Find/Mount methods
+/// Mounts lives until explicit unmount (see below) and affect for future
+/// materialization by the same path
 class StorageNode : public Node<StorageNode> {
  public:
-  /// @brief Links current node with subtree with root in given node
+  /// @brief Mounts current node with subtree with root in given node
   /// @param node root of subtree to link
-  /// @return pointer to new storage node mounted to this and all previously
-  /// given subtrees
-  /// @note
-  /// - resulting node hierarchy is fixed on the moment of mount and does not
-  /// change on external cirtumstances
-  /// - node will be automatically unmounted on last strong reference
-  /// deletion
-  /// - name of node is inherited from first mounted volume node
-  /// - child creation makes a new Storage node mounted with all co-named
-  /// children nodes of mounted trees if any, or force create new child node in
-  /// some mounted volume node
-  /// - node data joins all node data of mounted Volume nodes, key
-  /// priority is on last mounted nodes (fresh layer)
-  virtual Ptr Mount(const VolumeNode::Ptr& node) = 0;
+  /// @return new node with top-layer as given node
+  /// @note mount will be valid and globally visible for all result life
+  /// @note mount does not make side-effects to current node
+  [[nodiscard]] virtual Ptr Mount(const VolumeNode::Ptr& node) const = 0;
 };
+
+/// todo GoTo(path)
 
 VolumeNode::Ptr CreateVolume();
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);

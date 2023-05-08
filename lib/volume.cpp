@@ -72,71 +72,55 @@ class VolumeNodeData final : public NodeData {
 
 class StorageNodeData final : public NodeData {
  public:
-  explicit StorageNodeData(NodeData::List&& links)
-      : links_(std::move(links)),
-        key_map_(CreateKeyMap(links_)) {
-    assert(!links_.empty());
+  explicit StorageNodeData(NodeData::List&& layers)
+      : layers_(std::move(layers)) {
+    assert(!layers_.empty());
   }
 
  public:
   Value Read(const Key& key) const override {
-    auto it = key_map_.find(key);
-    if (it != key_map_.end()) {
-      return it->second->Read(key);
+    for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
+      const auto& layer = *it;
+      auto value = layer->Read(key);
+      if (value.Has()) {
+        return value;
+      }
     }
 
-    return PriorityLink().Read(key);
+    return Value::NotSet();
   }
 
   void Write(const Key& key, Value&& value) override {
-    auto it = key_map_.find(key);
-    if (it != key_map_.end()) {
-      it->second->Write(key, std::move(value));
-    } else {
-      // new key scenario -- write to last node
-      PriorityLink().Write(key, std::move(value));
+    for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
+      const auto& layer = *it;
+      if (layer->Read(key).Has()) {
+        layer->Write(key, std::move(value));
+        return;
+      }
     }
+
+    TopLayer().Write(key, std::move(value));
   }
 
   bool Remove(const Key& key) override {
-    auto it = key_map_.find(key);
-    if (it != key_map_.end()) {
-      return it->second->Remove(key);
-    }
-
-    return PriorityLink().Remove(key);
-  }
-
-  KeyValueList Enumerate() const override {
-    KeyValueList result;
-    for (const auto& [key, node] : key_map_) {
-      result.push_back({key, node->Read(key)});
-    }
-
-    for (auto&& [key, value] : PriorityLink().Enumerate()) {
-      if (!key_map_.contains(key)) {
-        result.push_back({std::move(key), std::move(value)});
-      }
+    bool result = false;
+    for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
+      const auto& layer = *it;
+      result = layer->Remove(key) || result;
     }
 
     return result;
   }
 
- private:
-  using KeyNodeMap = std::unordered_map<Key, NodeData*>;
-
-  NodeData& PriorityLink() const {
-    return *links_.back();
-  }
-
-  static KeyNodeMap CreateKeyMap(const NodeData::List& links) {
-    KeyNodeMap result;
-    for (auto it = links.rbegin(); it != links.rend(); ++it) {
-      const auto& link = *it;
-      for (auto&& [key, value] : link->Enumerate()) {
-        auto& node = result[key];
-        if (node == nullptr) {
-          node = link.get();
+  KeyValueList Enumerate() const override {
+    KeyValueList result;
+    std::unordered_set<NodeData::Key> used;
+    for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
+      const auto& layer = *it;
+      for (auto&& [key, value] : layer->Enumerate()) {
+        if (!used.contains(key)) {
+          used.insert(key);
+          result.push_back({std::move(key), std::move(value)});
         }
       }
     }
@@ -145,8 +129,12 @@ class StorageNodeData final : public NodeData {
   }
 
  private:
-  const NodeData::List links_;
-  const KeyNodeMap key_map_;
+  NodeData& TopLayer() const {
+    return *layers_.back();
+  }
+
+ private:
+  const NodeData::List layers_;
 };
 
 class VolumeNodeImpl final : public VolumeNode {
@@ -160,7 +148,7 @@ class VolumeNodeImpl final : public VolumeNode {
     return name_;
   }
 
-  Ptr Create(const Name& name) override {
+  VolumeNode::Ptr Create(const Name& name) override {
     std::lock_guard lock(mutex_);
     auto& child = children_[name];
     if (child) {
@@ -171,7 +159,7 @@ class VolumeNodeImpl final : public VolumeNode {
     return child;
   }
 
-  Ptr Find(const Name& name) const override {
+  VolumeNode::Ptr Find(const Name& name) const override {
     std::shared_lock lock(mutex_);
     auto it = children_.find(name);
     if (it == children_.end()) {
@@ -190,9 +178,9 @@ class VolumeNodeImpl final : public VolumeNode {
     return data_;
   }
 
-  List Enumerate() const override {
+  VolumeNode::List Enumerate() const override {
     std::shared_lock lock(mutex_);
-    List result;
+    VolumeNode::List result;
     result.reserve(children_.size());
     for (const auto& [_, child] : children_) {
       result.push_back(child);
@@ -209,26 +197,135 @@ class VolumeNodeImpl final : public VolumeNode {
   std::unordered_map<Name, Node::Ptr> children_;
 };
 
+class MountPoint {
+ public:
+  using StrongPtr = std::shared_ptr<MountPoint>;
+  using WeakPtr = std::weak_ptr<MountPoint>;
+  using Unmounter = std::function<void()>;
+
+  MountPoint(const VolumeNode::Ptr& node, const MountPoint::StrongPtr& next)
+      : node_(node),
+        next_(next) {
+  }
+
+  void SetUnmounter(const Unmounter& unmounter) {
+    on_unmount_ = unmounter;
+  }
+
+  VolumeNode::Ptr GetNode() const {
+    return node_;
+  }
+
+  ~MountPoint() {
+    if (on_unmount_) {
+      on_unmount_();
+    }
+  }
+
+ private:
+  VolumeNode::Ptr node_;
+  StrongPtr next_;
+  Unmounter on_unmount_;
+};
+
+class StorageNodeMetadata
+    : public std::enable_shared_from_this<StorageNodeMetadata> {
+ public:
+  using Ptr = std::shared_ptr<StorageNodeMetadata>;
+  using List = std::vector<Ptr>;
+
+ public:
+  explicit StorageNodeMetadata(const StorageNode::Name& name)
+      : name_(name) {
+  }
+
+ public:
+  template <typename... Args>
+  static StorageNodeMetadata::Ptr Create(Args&&... args) {
+    return std::make_shared<StorageNodeMetadata>(std::forward<Args>(args)...);
+  }
+
+  const StorageNode::Name& Name() const {
+    return name_;
+  }
+
+  StorageNodeMetadata::Ptr GetAddChild(const StorageNode::Name& name) {
+    std::shared_lock rlock(mutex_);
+    auto it = children_.find(name);
+    if (it != children_.end()) {
+      return it->second;
+    }
+    rlock.unlock();
+
+    std::lock_guard wlock(mutex_);
+    auto& child = children_[name];
+    if (!child) {
+      child = StorageNodeMetadata::Create(name);
+    }
+
+    return child;
+  }
+
+  void RemoveChild(const StorageNode::Name& name) {
+    std::lock_guard lock(mutex_);
+    children_.erase(name);
+  }
+
+  void AddMountPoint(const MountPoint::StrongPtr& mount) {
+    std::lock_guard lock(mutex_);
+    auto it = mounts_.insert(mounts_.end(), mount);
+    auto self = shared_from_this();
+    mount->SetUnmounter([self, it]() {
+      std::lock_guard lock(self->mutex_);
+      self->mounts_.erase(it);
+    });
+  }
+
+  void GetMountPoints(VolumeNode::List& layers) {
+    std::shared_lock lock(mutex_);
+    for (const auto& mount_ref : mounts_) {
+      auto mount = mount_ref.lock();
+      if (mount) {
+        layers.push_back(std::move(mount->GetNode()));
+      }
+    }
+  }
+
+ private:
+  const StorageNode::Name name_;
+
+  std::shared_mutex mutex_;
+  std::unordered_map<StorageNode::Name, StorageNodeMetadata::Ptr> children_;
+  std::list<MountPoint::WeakPtr> mounts_;
+};
+
 class StorageNodeImpl final : public StorageNode {
  public:
-  StorageNodeImpl(const Name& name, VolumeNode::List&& links)
-      : name_(name),
-        links_(std::move(links)) {
+  StorageNodeImpl(const StorageNodeMetadata::Ptr& meta,
+                  VolumeNode::List&& layers,
+                  MountPoint::StrongPtr&& mount = nullptr)
+      : meta_(meta),
+        layers_(std::move(layers)),
+        mount_(std::move(mount)) {
+    if (mount_) {
+      meta_->AddMountPoint(mount_);
+    }
   }
 
   /// StorageNode interface
  public:
-  StorageNode::Ptr Mount(const VolumeNode::Ptr& node) override {
-    auto links = links_;
-    links.push_back(node);
-    const auto& child_name = PriorityLink().GetName();
-    return std::make_shared<StorageNodeImpl>(child_name, std::move(links));
+  Ptr Mount(const VolumeNode::Ptr& node) const override {
+    auto mount = std::make_shared<MountPoint>(node, mount_);
+    auto layers = layers_;
+    layers.push_back(node);
+    return std::make_shared<StorageNodeImpl>(meta_, std::move(layers),
+                                             std::move(mount));
   }
 
   /// Node interface
  public:
   const Name& GetName() const override {
-    return name_;
+    return meta_->Name();
   }
 
   Ptr Create(const Name& name) override {
@@ -237,50 +334,60 @@ class StorageNodeImpl final : public StorageNode {
       return child;
     }
 
-    auto link = PriorityLink().Create(name);
-    VolumeNode::List children_links = {std::move(link)};
-    return std::make_shared<StorageNodeImpl>(name, std::move(children_links));
+    auto layer = TopLayer().Create(name);
+    VolumeNode::List child_layers = {std::move(layer)};
+    auto child_meta = meta_->GetAddChild(name);
+    /// do not search for mount points, we've already done this on Find
+    return std::make_shared<StorageNodeImpl>(std::move(child_meta),
+                                             std::move(child_layers));
   }
 
-  Ptr Find(const Name& name) const override {
-    VolumeNode::List children_links;
-    children_links.reserve(links_.size());
-    for (const auto& link : links_) {
-      auto child = link->Find(name);
+  StorageNode::Ptr Find(const Name& name) const override {
+    VolumeNode::List child_layers;
+    child_layers.reserve(layers_.size());
+    for (const auto& layer : layers_) {
+      auto child = layer->Find(name);
       if (child) {
-        children_links.push_back(std::move(child));
+        child_layers.push_back(std::move(child));
       }
     }
-
-    if (children_links.empty()) {
+    auto child_meta = meta_->GetAddChild(name);
+    child_meta->GetMountPoints(child_layers);
+    if (child_layers.empty()) {
+      meta_->RemoveChild(name);
       return nullptr;
     }
 
-    return std::make_shared<StorageNodeImpl>(name, std::move(children_links));
+    return std::make_shared<StorageNodeImpl>(std::move(child_meta),
+                                             std::move(child_layers));
   }
 
   bool Unlink(const Name& name) override {
     bool result = false;
-    for (const auto& link : links_) {
-      result = link->Unlink(name) || result;
+    for (const auto& layer : layers_) {
+      result = layer->Unlink(name) || result;
     }
 
+    meta_->RemoveChild(name);
     return result;
   }
 
-  List Enumerate() const override {
+  StorageNode::List Enumerate() const override {
     std::unordered_map<Name, VolumeNode::List> name_groups;
-    for (const auto& link : links_) {
-      for (auto&& child : link->Enumerate()) {
+    for (const auto& layer : layers_) {
+      for (auto&& child : layer->Enumerate()) {
         const auto& name = child->GetName();
         name_groups[name].push_back(std::move(child));
       }
     }
 
-    List result;
+    StorageNode::List result;
     result.reserve(name_groups.size());
-    for (auto&& [name, links] : name_groups) {
-      auto child = std::make_shared<StorageNodeImpl>(name, std::move(links));
+    for (auto&& [name, layers] : name_groups) {
+      auto meta = meta_->GetAddChild(name);
+      meta->GetMountPoints(layers);
+      auto child =
+          std::make_shared<StorageNodeImpl>(std::move(meta), std::move(layers));
       result.push_back(std::move(child));
     }
 
@@ -288,23 +395,24 @@ class StorageNodeImpl final : public StorageNode {
   }
 
   NodeData::Ptr Open() const override {
-    NodeData::List link_data;
-    link_data.reserve(links_.size());
-    for (const auto& link : links_) {
-      link_data.push_back(link->Open());
+    NodeData::List layer_data;
+    layer_data.reserve(layers_.size());
+    for (const auto& layer : layers_) {
+      layer_data.push_back(layer->Open());
     }
 
-    return std::make_shared<StorageNodeData>(std::move(link_data));
+    return std::make_shared<StorageNodeData>(std::move(layer_data));
   }
 
  private:
-  VolumeNode& PriorityLink() const {
-    return *links_.back();
+  VolumeNode& TopLayer() const {
+    return *layers_.back();
   }
 
  private:
-  const Name name_;
-  const VolumeNode::List links_;
+  const StorageNodeMetadata::Ptr meta_;
+  const VolumeNode::List layers_;
+  const MountPoint::StrongPtr mount_;
 };
 
 enum class FormatMarker : uint8_t {
@@ -655,7 +763,8 @@ VolumeNode::Ptr jbkv::CreateVolume() {
 
 StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
   VolumeNode::List nodes{node};
-  return std::make_shared<StorageNodeImpl>(kRootName, std::move(nodes));
+  const auto meta = StorageNodeMetadata::Create(kRootName);
+  return std::make_shared<StorageNodeImpl>(meta, std::move(nodes));
 }
 
 void jbkv::Save(const VolumeNode::Ptr& root,
