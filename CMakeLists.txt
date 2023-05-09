@@ -1,8 +1,12 @@
 cmake_minimum_required(VERSION 3.5)
 
 project(jbkv)
-# Treat warnings as errors on other compilers
-add_compile_options(-Werror)
+if(MSVC)
+  add_compile_options(/W4 /WX)
+else()
+  add_compile_options(-Werror)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 cmake_policy(SET CMP0135 NEW)
 

@@ -12,10 +12,10 @@ TEST(VolumeNodeData, ReadWrite) {
   d->Write("unsigned char", (unsigned char)'h');
   d->Write("int16", (int16_t)-32);
   d->Write("uint16", (uint16_t)48);
-  d->Write("int32", -35000);
-  d->Write("uint32", 10004u);
-  d->Write("int64", -10000000l);
-  d->Write("uin64", 1000456ul);
+  d->Write("int32", (int32_t)-35000);
+  d->Write("uint32", (uint32_t)10004);
+  d->Write("int64", (int64_t)-10000000);
+  d->Write("uin64", (uint64_t)1000456);
   d->Write("float", 23.567f);
   d->Write("double", 1234.567678);
   d->Write("string", "Ю");
@@ -108,8 +108,6 @@ TEST(VolumeNodeData, Accept) {
   });
 
   EXPECT_EQ(num, 42);
-
-  bool checked = false;
   EXPECT_FALSE(d->Read("unknown").has_value());
 }
 

@@ -11,10 +11,10 @@ TEST(Volume, SaveLoadData) {
   d->Write("unsigned char", (unsigned char)'h');
   d->Write("int16", (int16_t)-32);
   d->Write("uint16", (uint16_t)48);
-  d->Write("int32", -35000);
-  d->Write("uint32", 10004u);
-  d->Write("int64", -10000000l);
-  d->Write("uin64", 1000456ul);
+  d->Write("int32", (int32_t)-35000);
+  d->Write("uint32", (uint32_t)10004);
+  d->Write("int64", (int64_t)-10000000);
+  d->Write("uin64", (uint64_t)1000456);
   d->Write("float", 23.567f);
   d->Write("double", 1234.567678);
   d->Write("string", "Ю");
@@ -31,9 +31,9 @@ TEST(Volume, SaveLoadData) {
   EXPECT_EQ(d2->Read<int16_t>("int16"), -32);
   EXPECT_EQ(d2->Read<uint16_t>("uint16"), 48);
   EXPECT_EQ(d2->Read<int32_t>("int32"), -35000);
-  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004u);
-  EXPECT_EQ(d2->Read<int64_t>("int64"), -10000000l);
-  EXPECT_EQ(d2->Read<uint64_t>("uin64"), 1000456ul);
+  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004);
+  EXPECT_EQ(d2->Read<int64_t>("int64"), -10000000);
+  EXPECT_EQ(d2->Read<uint64_t>("uin64"), 1000456);
   EXPECT_DOUBLE_EQ(*d2->Read<float>("float"), 23.567f);
   EXPECT_DOUBLE_EQ(*d2->Read<double>("double"), 1234.567678);
   EXPECT_EQ(d2->Read<Value::String>("string"), "Ю");
