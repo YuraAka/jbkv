@@ -9,23 +9,59 @@
 #include <variant>
 #include <list>
 #include <iomanip>
+#include <iostream>
 
 namespace jbkv {
 
+template <typename T>
+class Referenced {
+ public:
+  Referenced()
+      : storage_(std::make_shared<T>()) {
+  }
+
+  Referenced(T&& storage)
+      : storage_(std::make_shared<T>(std::move(storage))) {
+  }
+
+  Referenced(std::initializer_list<typename T::value_type> args)
+      : storage_(std::make_shared<T>(std::move(args))) {
+  }
+
+  bool operator==(const Referenced<T>& other) const {
+    return Ref() == other.Ref();
+  }
+
+  bool operator==(const T& other) const {
+    return Ref() == other;
+  }
+
+  T& Ref() {
+    return *storage_;
+  }
+
+  const T& Ref() const {
+    return *storage_;
+  }
+
+ private:
+  std::shared_ptr<T> storage_;
+};
+
 class Value {
  public:
-  using Blob = std::vector<uint8_t>;
-  using Data = std::variant<bool, char, unsigned char, uint16_t, int16_t,
-                            uint32_t, int32_t, uint64_t, int64_t, float, double,
-                            std::string, Blob>;
+  using Blob = Referenced<std::vector<uint8_t>>;
+  using String = Referenced<std::string>;
+  using Data =
+      std::variant<bool, char, unsigned char, uint16_t, int16_t, uint32_t,
+                   int32_t, uint64_t, int64_t, float, double, String, Blob>;
 
-  // Value() = default;
   explicit Value(Data&& data)
       : data_(std::move(data)) {
   }
 
   explicit Value(const char* data)
-      : data_(std::string(data)) {
+      : data_(String(data)) {
   }
 
   template <typename T>
@@ -46,11 +82,13 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
     using T = std::remove_cvref_t<decltype(data)>;
     if constexpr (std::is_same_v<T, Value::Blob>) {
       os << std::hex;
-      for (const auto byte : data) {
+      for (const auto byte : data.Ref()) {
         os << byte;
       }
 
       os << std::resetiosflags(std::ios_base::basefield);
+    } else if constexpr (std::is_same_v<T, Value::String>) {
+      os << data.Ref();
     } else {
       os << data;
     }
@@ -84,6 +122,7 @@ class NodeData {
 
   /// Updates value by key if key exists, otherwise do nothing
   /// @return true if value was updated, otherwise false
+  /// @note value is not moved in case Update returned false
   virtual bool Update(const Key& key, Value&& value) = 0;
 
   /// Removes value by key

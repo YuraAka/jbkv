@@ -14,7 +14,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_CACHEFILE_DIR ${CMAKE_BINARY_DIR}/cache)
-# configure_file(CMakeLists.txt.in ${CMAKE_CACHEFILE_DIR}/CMakeLists.txt)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -26,20 +25,21 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# Now simply link against gtest or gtest_main as needed. Eg
-#add_executable(example example.cpp)
+include_directories(${GTEST_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(lib-jbkv STATIC
     lib/volume.cpp
     lib/volume.h
 )
 
-add_executable(unittest
-  tests/unit.cpp
-)
-
-include_directories(${GTEST_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(unittest tests/unit.cpp)
 target_link_libraries(unittest ${GTEST_BOTH_LIBRARIES} lib-jbkv gtest_main)
 target_compile_features(unittest PRIVATE cxx_std_11)
 
-add_test(NAME example_test COMMAND unittest)
+add_executable(functest tests/func.cpp)
+target_link_libraries(functest ${GTEST_BOTH_LIBRARIES} lib-jbkv gtest_main)
+target_compile_features(functest PRIVATE cxx_std_11)
+
+add_executable(stresstest tests/stress.cpp)
+target_link_libraries(stresstest ${GTEST_BOTH_LIBRARIES} lib-jbkv gtest_main)
+target_compile_features(stresstest PRIVATE cxx_std_11)

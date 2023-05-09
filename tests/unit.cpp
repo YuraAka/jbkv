@@ -32,7 +32,7 @@ TEST(VolumeNodeData, ReadWrite) {
   EXPECT_EQ(d->Read<uint64_t>("uin64"), 1000456ul);
   EXPECT_DOUBLE_EQ(*d->Read<float>("float"), 23.567f);
   EXPECT_DOUBLE_EQ(*d->Read<double>("double"), 1234.567678);
-  EXPECT_EQ(d->Read<std::string>("string"), "Ю");
+  EXPECT_EQ(d->Read<Value::String>("string"), "Ю");
   EXPECT_EQ(d->Read<Value::Blob>("blob"), (Value::Blob{1, 2, 3, 4}));
   EXPECT_EQ(d->Read<uint32_t>("uint32"), 10004u);
 }
@@ -50,9 +50,9 @@ TEST(VolumeNodeData, Enumerate) {
   std::sort(fields.begin(), fields.end(), by_key);
   ASSERT_EQ(fields.size(), 2);
   EXPECT_EQ(fields[0].first, "good");
-  EXPECT_EQ(*fields[0].second.Try<std::string>(), "buy");
+  EXPECT_EQ(*fields[0].second.Try<Value::String>(), "buy");
   EXPECT_EQ(fields[1].first, "hello");
-  EXPECT_EQ(*fields[1].second.Try<std::string>(), "world");
+  EXPECT_EQ(*fields[1].second.Try<Value::String>(), "world");
 }
 
 TEST(VolumeNodeData, EnumerateExcludeRemoved) {
@@ -72,7 +72,7 @@ TEST(VolumeNodeData, ValueCheck) {
   auto d = v->Open();
   EXPECT_FALSE(d->Read("hello"));
   d->Write("hello", "world");
-  const auto str_value = d->Read<std::string>("hello");
+  const auto str_value = d->Read<Value::String>("hello");
   ASSERT_TRUE(str_value.has_value());
   EXPECT_EQ(*str_value, "world");
   const auto int_value = d->Read<int>("hello");
@@ -126,7 +126,7 @@ TEST(VolumeNodeData, ChangeType) {
   d->Write("number", 42);
   EXPECT_EQ(d->Read<int>("number"), 42);
   d->Write("number", "string number");
-  EXPECT_EQ(d->Read<std::string>("number"), "string number");
+  EXPECT_EQ(d->Read<Value::String>("number"), "string number");
 }
 
 TEST(VolumeNodeData, Update) {
@@ -175,11 +175,11 @@ TEST(VolumeNode, ChildrenEnumerate) {
   std::sort(children.begin(), children.end(), by_name);
   ASSERT_EQ(children.size(), 3);
   EXPECT_EQ(children[0]->GetName(), "c1");
-  EXPECT_EQ(children[0]->Open()->Read<std::string>("text"), "t1");
+  EXPECT_EQ(children[0]->Open()->Read<Value::String>("text"), "t1");
   EXPECT_EQ(children[1]->GetName(), "c2");
-  EXPECT_EQ(children[1]->Open()->Read<std::string>("text"), "t2");
+  EXPECT_EQ(children[1]->Open()->Read<Value::String>("text"), "t2");
   EXPECT_EQ(children[2]->GetName(), "c3");
-  EXPECT_EQ(children[2]->Open()->Read<std::string>("text"), "t3");
+  EXPECT_EQ(children[2]->Open()->Read<Value::String>("text"), "t3");
 }
 
 TEST(VolumeNode, ChildrenEnumerateExludeUnlinked) {
@@ -293,23 +293,23 @@ TEST(StorageNode, LayerRead) {
   /// single layer
   auto s = MountStorage(v1);
   auto d1 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d1->Read<std::string>("from"), "v1");
+  EXPECT_EQ(d1->Read<Value::String>("from"), "v1");
 
   // second layer
   auto m = s->Find("i")->Mount(v2);
   auto d2 = m->Find("c1")->Open();
-  EXPECT_EQ(d2->Read<std::string>("from"), "v2");
+  EXPECT_EQ(d2->Read<Value::String>("from"), "v2");
 
   // global effect
   auto d3 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d3->Read<std::string>("from"), "v2");
+  EXPECT_EQ(d3->Read<Value::String>("from"), "v2");
 
   m.reset();  // unmount
   auto d4 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d4->Read<std::string>("from"), "v1");
+  EXPECT_EQ(d4->Read<Value::String>("from"), "v1");
 
   // no side-effects
-  EXPECT_EQ(d2->Read<std::string>("from"), "v2");
+  EXPECT_EQ(d2->Read<Value::String>("from"), "v2");
 }
 
 TEST(StorageNode, UnlinkAll) {

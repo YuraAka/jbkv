@@ -468,17 +468,25 @@ void Deserialize(std::string& value, std::istream& in) {
   in.read(&value[0], size);
 }
 
+void Serialize(const Value::String& value, std::ostream& out) {
+  Serialize(value.Ref(), out);
+}
+
+void Deserialize(Value::String& value, std::istream& in) {
+  Deserialize(value.Ref(), in);
+}
+
 void Serialize(const Value::Blob& value, std::ostream& out) {
-  uint64_t size = value.size();
+  uint64_t size = value.Ref().size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
-  out.write(reinterpret_cast<const char*>(&value[0]), size);
+  out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size);
 }
 
 void Deserialize(Value::Blob& value, std::istream& in) {
   uint64_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
-  value.resize(size);
-  in.read(reinterpret_cast<char*>(&value[0]), size);
+  value.Ref().resize(size);
+  in.read(reinterpret_cast<char*>(&value.Ref()[0]), size);
 }
 
 template <typename T>
@@ -521,7 +529,7 @@ void Serialize(const Value& value, std::ostream& out) {
       Serialize(FormatMarker::Float, out);
     } else if constexpr (std::is_same_v<Type, double>) {
       Serialize(FormatMarker::Double, out);
-    } else if constexpr (std::is_same_v<Type, std::string>) {
+    } else if constexpr (std::is_same_v<Type, Value::String>) {
       Serialize(FormatMarker::String, out);
     } else if constexpr (std::is_same_v<Type, Value::Blob>) {
       Serialize(FormatMarker::Blob, out);
@@ -604,15 +612,15 @@ void Deserialize(std::optional<Value>& value, std::istream& in) {
       break;
     }
     case FormatMarker::String: {
-      std::string data = {};
+      Value::String data;
       Deserialize(data, in);
-      value.emplace(data);
+      value.emplace(std::move(data));
       break;
     }
     case FormatMarker::Blob: {
-      Value::Blob data = {};
+      Value::Blob data;
       Deserialize(data, in);
-      value.emplace(data);
+      value.emplace(std::move(data));
       break;
     }
     default:
@@ -622,7 +630,15 @@ void Deserialize(std::optional<Value>& value, std::istream& in) {
 }
 
 template <typename T>
-  requires(std::is_same_v<T, std::string> || std::is_same_v<T, Value::Blob>)
+  requires(std::is_same_v<T, Value::String> || std::is_same_v<T, Value::Blob>)
+void CheckSum(const T& value, uint8_t& checksum) {
+  for (const auto c : value.Ref()) {
+    checksum ^= c;
+  }
+}
+
+template <typename T>
+  requires(std::is_same_v<T, std::string>)
 void CheckSum(const T& value, uint8_t& checksum) {
   for (const auto c : value) {
     checksum ^= c;
@@ -726,9 +742,9 @@ class VolumeLoader {
       std::optional<NodeData::Value> value;
       Deserialize(key, stream_);
       Deserialize(value, stream_);
-      data->Write(key, std::move(*value));
       CheckSum(key, checksum);
       CheckSum(*value, checksum);
+      data->Write(key, std::move(*value));
     }
 
     uint8_t actual_checksum = 0;
