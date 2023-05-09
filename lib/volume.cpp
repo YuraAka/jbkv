@@ -1,18 +1,19 @@
 #include "volume.h"
+#include <assert.h>
+#include <deque>
 #include <exception>
 #include <fstream>
+#include <functional>
+#include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
+#include <stdexcept>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <list>
-#include <shared_mutex>
-#include <deque>
-#include <stdexcept>
-#include <functional>
 
 namespace {
 using namespace jbkv;
@@ -516,13 +517,13 @@ void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
-  uint32_t size = value.size();
+  uint64_t size = value.size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
   out.write(value.data(), size);
 }
 
 void Deserialize(std::string& value, std::istream& in) {
-  uint32_t size = 0;
+  uint64_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
 
   value.resize(size);
@@ -538,13 +539,13 @@ void Deserialize(Value::String& value, std::istream& in) {
 }
 
 void Serialize(const Value::Blob& value, std::ostream& out) {
-  uint32_t size = value.Ref().size();
+  uint64_t size = value.Ref().size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
   out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size);
 }
 
 void Deserialize(Value::Blob& value, std::istream& in) {
-  uint32_t size = 0;
+  uint64_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
   value.Ref().resize(size);
   in.read(reinterpret_cast<char*>(&value.Ref()[0]), size);
