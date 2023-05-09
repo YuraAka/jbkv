@@ -41,6 +41,17 @@ class VolumeNodeData final : public NodeData {
     data_.insert_or_assign(key, std::move(value));
   }
 
+  bool Update(const Key& key, Value&& value) override {
+    std::lock_guard lock(mutex_);
+    auto it = data_.find(key);
+    if (it == data_.end()) {
+      return false;
+    }
+
+    it->second = std::move(value);
+    return true;
+  }
+
   bool Remove(const Key& key) override {
     std::lock_guard lock(mutex_);
     return data_.erase(key) == 1;
@@ -83,15 +94,20 @@ class StorageNodeData final : public NodeData {
   }
 
   void Write(const Key& key, Value&& value) override {
+    if (!Update(key, std::move(value))) {
+      TopLayer().Write(key, std::move(value));
+    }
+  }
+
+  bool Update(const Key& key, Value&& value) override {
     for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
       const auto& layer = *it;
-      if (layer->Read(key)) {  // todo update?
-        layer->Write(key, std::move(value));
-        return;
+      if (layer->Update(key, std::move(value))) {
+        return true;
       }
     }
 
-    TopLayer().Write(key, std::move(value));
+    return false;
   }
 
   bool Remove(const Key& key) override {

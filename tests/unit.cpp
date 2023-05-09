@@ -129,6 +129,18 @@ TEST(VolumeNodeData, ChangeType) {
   EXPECT_EQ(d->Read<std::string>("number"), "string number");
 }
 
+TEST(VolumeNodeData, Update) {
+  auto d = CreateVolume()->Open();
+  d->Write("number", 42);
+  EXPECT_EQ(d->Read<int>("number"), 42);
+
+  d->Update("number", 50);
+  EXPECT_EQ(d->Read<int>("number"), 50);
+
+  d->Update("other", 34);
+  EXPECT_FALSE(d->Read<int>("other"));
+}
+
 TEST(VolumeNodeData, ValueOut) {
   std::stringstream str;
   str << Value(true) << Value('a') << Value((unsigned char)'b')
@@ -361,6 +373,29 @@ TEST(StorageNodeData, WriteNewToTopLayer) {
 
   EXPECT_FALSE(v1->Open()->Read("num").has_value());
   EXPECT_EQ(v2->Open()->Read<int>("num"), 35);
+}
+
+TEST(StorageNodeData, Update) {
+  auto v1 = CreateVolume();
+  auto v2 = CreateVolume();
+
+  v1->Open()->Write("num1", 42);
+  v2->Open()->Write("num2", 23);
+
+  auto s = MountStorage(v1)->Mount(v2);
+
+  EXPECT_EQ(s->Open()->Read<int>("num1"), 42);
+  EXPECT_EQ(s->Open()->Read<int>("num2"), 23);
+
+  EXPECT_TRUE(s->Open()->Update("num1", 24));
+  EXPECT_TRUE(s->Open()->Update("num2", 32));
+  EXPECT_FALSE(s->Open()->Update("num3", 77));
+
+  EXPECT_EQ(s->Open()->Read<int>("num1"), 24);
+  EXPECT_EQ(s->Open()->Read<int>("num2"), 32);
+  EXPECT_FALSE(s->Open()->Read("num3"));
+  EXPECT_EQ(v1->Open()->Read<int>("num1"), 24);
+  EXPECT_EQ(v2->Open()->Read<int>("num2"), 32);
 }
 
 TEST(StorageNodeData, RemoveFromAllLayers) {
