@@ -49,7 +49,7 @@ TEST(VolumeNodeData, Enumerate) {
   };
 
   std::sort(fields.begin(), fields.end(), by_key);
-  ASSERT_EQ(fields.size(), 2);
+  ASSERT_EQ(fields.size(), size_t(2));
   EXPECT_EQ(fields[0].first, "good");
   EXPECT_EQ(*fields[0].second.Try<Value::String>(), "buy");
   EXPECT_EQ(fields[1].first, "hello");
@@ -64,7 +64,7 @@ TEST(VolumeNodeData, EnumerateExcludeRemoved) {
   d->Remove("hello");
   auto fields = d->Enumerate();
 
-  ASSERT_EQ(fields.size(), 1);
+  ASSERT_EQ(fields.size(), size_t(1));
   EXPECT_EQ(fields[0].first, "good");
 }
 
@@ -140,6 +140,13 @@ TEST(VolumeNodeData, Update) {
   EXPECT_FALSE(d->Read<int>("other"));
 }
 
+TEST(VolumeNodeData, ReadNull) {
+  auto d = CreateVolume()->Open();
+  EXPECT_FALSE(d->Read<int>("number").has_value());
+  d->Write("number", 42);
+  EXPECT_FALSE(d->Read<double>("number").has_value());
+}
+
 TEST(VolumeNodeData, ValueOut) {
   std::stringstream str;
   str << Value(true) << Value('a') << Value((unsigned char)'b')
@@ -157,8 +164,8 @@ TEST(VolumeNode, ChildrenAddFind) {
 
   auto c1 = v->Find("child1");
   ASSERT_TRUE(c1);
-  EXPECT_TRUE(c1->Find("child11"));
-  EXPECT_TRUE(v->Find("child2"));
+  EXPECT_TRUE(c1->Find("child11")->IsValid());
+  EXPECT_TRUE(v->Find("child2")->IsValid());
 }
 
 TEST(VolumeNode, ChildrenEnumerate) {
@@ -172,7 +179,7 @@ TEST(VolumeNode, ChildrenEnumerate) {
   };
 
   std::sort(children.begin(), children.end(), by_name);
-  ASSERT_EQ(children.size(), 3);
+  ASSERT_EQ(children.size(), size_t(3));
   EXPECT_EQ(children[0]->GetName(), "c1");
   EXPECT_EQ(children[0]->Open()->Read<Value::String>("text"), "t1");
   EXPECT_EQ(children[1]->GetName(), "c2");
@@ -194,7 +201,7 @@ TEST(VolumeNode, ChildrenEnumerateExludeUnlinked) {
   };
 
   std::sort(children.begin(), children.end(), by_name);
-  ASSERT_EQ(children.size(), 2);
+  ASSERT_EQ(children.size(), size_t(2));
   EXPECT_EQ(children[0]->GetName(), "c1");
   EXPECT_EQ(children[1]->GetName(), "c3");
 }
@@ -205,10 +212,10 @@ TEST(VolumeNode, ChildrenUnlink) {
   c1->Create("c2");
   c1->Open()->Write("num", 32);
 
-  EXPECT_TRUE(v->Find("c1"));
+  EXPECT_TRUE(v->Find("c1")->IsValid());
   v->Unlink("c1");
-  EXPECT_FALSE(v->Find("c1"));
-  EXPECT_TRUE(c1->Find("c2"));
+  EXPECT_FALSE(v->Find("c1")->IsValid());
+  EXPECT_TRUE(c1->Find("c2")->IsValid());
   EXPECT_EQ(c1->Open()->Read<int>("num"), 32);
 }
 
@@ -218,7 +225,7 @@ TEST(VolumeNode, CreateExisting) {
   v->Create("c1")->Open()->Write("num", 38);
 
   auto c1 = v->Find("c1");
-  EXPECT_TRUE(c1->Find("c2"));
+  EXPECT_TRUE(c1->Find("c2")->IsValid());
   EXPECT_EQ(c1->Open()->Read<int>("num"), 38);
 }
 
@@ -230,15 +237,15 @@ TEST(StorageNode, MountsVolumeNodes) {
   v2->Create("second");
 
   auto s1 = MountStorage(v1);
-  EXPECT_TRUE(s1->Find("first"));
-  EXPECT_FALSE(s1->Find("second"));
+  EXPECT_TRUE(s1->Find("first")->IsValid());
+  EXPECT_FALSE(s1->Find("second")->IsValid());
 
   auto s2 = s1->Mount(v2);
-  EXPECT_TRUE(s1->Find("first"));
-  EXPECT_FALSE(s1->Find("second"));
+  EXPECT_TRUE(s1->Find("first")->IsValid());
+  EXPECT_FALSE(s1->Find("second")->IsValid());
 
-  EXPECT_TRUE(s2->Find("first"));
-  EXPECT_TRUE(s2->Find("second"));
+  EXPECT_TRUE(s2->Find("first")->IsValid());
+  EXPECT_TRUE(s2->Find("second")->IsValid());
 }
 
 TEST(StorageNode, CreateUseExisting) {
@@ -266,7 +273,7 @@ TEST(StorageNode, LiveAfterUnlink) {
   auto s = MountStorage(v->Find("child"));
   v->Unlink("child");
 
-  EXPECT_FALSE(v->Find("child"));
+  EXPECT_FALSE(v->Find("child")->IsValid());
   EXPECT_EQ(s->Open()->Read<int>("num"), 33);
 }
 
@@ -276,10 +283,21 @@ TEST(StorageNode, MountSubtree) {
 
   auto s = MountStorage(v);
   auto m = s->Find("c1")->Mount(v);
-  EXPECT_TRUE(s->Find("c1")->Find("c1"));
+  EXPECT_TRUE(s->Find("c1")->Find("c1")->IsValid());
   m.reset();  // unmount here
 
-  EXPECT_FALSE(s->Find("c1")->Find("c1"));
+  EXPECT_FALSE(s->Find("c1")->Find("c1")->IsValid());
+}
+
+TEST(StorageNode, CreatesOnTopLayer) {
+  auto v1 = CreateVolume();
+  auto v2 = CreateVolume();
+
+  auto s = MountStorage(v1)->Mount(v2);
+  s->Create("c1");
+  EXPECT_TRUE(s->Find("c1")->IsValid());
+  EXPECT_TRUE(v2->Find("c1")->IsValid());
+  EXPECT_FALSE(v1->Find("c1")->IsValid());
 }
 
 TEST(StorageNode, LayerRead) {
@@ -319,9 +337,9 @@ TEST(StorageNode, UnlinkAll) {
   v2->Create("a");
 
   auto s = MountStorage(v1)->Mount(v2);
-  EXPECT_TRUE(s->Find("a"));
+  EXPECT_TRUE(s->Find("a")->IsValid());
   EXPECT_TRUE(s->Unlink("a"));
-  EXPECT_FALSE(s->Find("a"));
+  EXPECT_FALSE(s->Find("a")->IsValid());
   EXPECT_FALSE(s->Unlink("a"));
 }
 
@@ -342,7 +360,7 @@ TEST(StorageNode, EnumerateAggregation) {
   };
 
   std::sort(children.begin(), children.end(), by_name);
-  ASSERT_EQ(children.size(), 3);
+  ASSERT_EQ(children.size(), size_t(3));
   EXPECT_EQ(children[0]->GetName(), "a");
   EXPECT_EQ(children[1]->GetName(), "b");
   EXPECT_EQ(children[2]->GetName(), "c");
@@ -429,7 +447,7 @@ TEST(StorageNodeData, EnumerateValues) {
   };
 
   std::sort(kv.begin(), kv.end(), by_key);
-  ASSERT_EQ(kv.size(), 2);
+  ASSERT_EQ(kv.size(), size_t(2));
   EXPECT_EQ(kv[0].first, "num1");
   EXPECT_EQ(*kv[0].second.Try<int>(), 1);
   EXPECT_EQ(kv[1].first, "num2");

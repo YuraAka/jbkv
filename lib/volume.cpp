@@ -7,24 +7,74 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
-#include <variant>
 #include <vector>
 #include <list>
 #include <shared_mutex>
-#include <iostream>
-#include <codecvt>
-#include <sstream>
 #include <deque>
-#include <assert.h>
 #include <stdexcept>
 #include <functional>
-#include <limits>
-// todo clear includes
 
 namespace {
 using namespace jbkv;
 
 const std::string kRootName = "/";
+
+template <typename Parent>
+class InvalidNode : public Parent {
+ public:
+  using typename Parent::List;
+  using typename Parent::Name;
+  using typename Parent::Ptr;
+
+ public:
+  Ptr Create(const Name&) override {
+    Throw();
+  }
+  Ptr Find(const Name&) const override {
+    Throw();
+  }
+  bool Unlink(const Name&) override {
+    Throw();
+  }
+  List Enumerate() const override {
+    Throw();
+  }
+  const Name& GetName() const override {
+    Throw();
+  }
+  NodeData::Ptr Open() const override {
+    Throw();
+  }
+  bool IsValid() const override {
+    return false;
+  }
+
+ protected:
+  [[noreturn]] void Throw() const {
+    throw std::runtime_error("Node is not valid");
+  }
+};
+
+class NullVolumeNode final : public InvalidNode<VolumeNode> {
+ public:
+  static VolumeNode::Ptr Instance() {
+    static auto instance = std::make_shared<NullVolumeNode>();
+    return instance;
+  }
+};
+
+class NullStorageNode final : public InvalidNode<StorageNode> {
+ public:
+  Ptr Mount(const VolumeNode::Ptr&) const override {
+    Throw();
+  }
+
+ public:
+  static StorageNode::Ptr Instance() {
+    static auto instance = std::make_shared<NullStorageNode>();
+    return instance;
+  }
+};
 
 class VolumeNodeData final : public NodeData {
  public:
@@ -173,7 +223,7 @@ class VolumeNodeImpl final : public VolumeNode {
     std::shared_lock lock(mutex_);
     auto it = children_.find(name);
     if (it == children_.end()) {
-      return nullptr;
+      return NullVolumeNode::Instance();
     }
 
     return it->second;
@@ -199,6 +249,10 @@ class VolumeNodeImpl final : public VolumeNode {
     return result;
   }
 
+  bool IsValid() const override {
+    return true;
+  }
+
  private:
   const Name name_;
   const NodeData::Ptr data_;
@@ -207,7 +261,7 @@ class VolumeNodeImpl final : public VolumeNode {
   std::unordered_map<Name, Node::Ptr> children_;
 };
 
-class MountPoint {
+class MountPoint : NonCopyableMovable {
  public:
   using StrongPtr = std::shared_ptr<MountPoint>;
   using WeakPtr = std::weak_ptr<MountPoint>;
@@ -239,7 +293,8 @@ class MountPoint {
 };
 
 class StorageNodeMetadata
-    : public std::enable_shared_from_this<StorageNodeMetadata> {
+    : NonCopyableMovable,
+      public std::enable_shared_from_this<StorageNodeMetadata> {
  public:
   using Ptr = std::shared_ptr<StorageNodeMetadata>;
   using List = std::vector<Ptr>;
@@ -340,7 +395,7 @@ class StorageNodeImpl final : public StorageNode {
 
   Ptr Create(const Name& name) override {
     auto child = Find(name);
-    if (child) {
+    if (child->IsValid()) {
       return child;
     }
 
@@ -357,7 +412,7 @@ class StorageNodeImpl final : public StorageNode {
     child_layers.reserve(layers_.size());
     for (const auto& layer : layers_) {
       auto child = layer->Find(name);
-      if (child) {
+      if (child->IsValid()) {
         child_layers.push_back(std::move(child));
       }
     }
@@ -365,7 +420,7 @@ class StorageNodeImpl final : public StorageNode {
     child_meta->GetMountPoints(child_layers);
     if (child_layers.empty()) {
       meta_->RemoveChild(name);
-      return nullptr;
+      return NullStorageNode::Instance();
     }
 
     return std::make_shared<StorageNodeImpl>(std::move(child_meta),
@@ -412,6 +467,10 @@ class StorageNodeImpl final : public StorageNode {
     }
 
     return std::make_shared<StorageNodeData>(std::move(layer_data));
+  }
+
+  bool IsValid() const override {
+    return true;
   }
 
  private:
@@ -503,9 +562,6 @@ void Deserialize(T& value, std::istream& in) {
   in.read(reinterpret_cast<char*>(&value), sizeof(value));
 }
 
-template <typename T>
-constexpr bool kAlwaysFalse = false;
-
 void Serialize(const Value& value, std::ostream& out) {
   value.Accept([&out](const auto& data) {
     using Type = std::remove_cvref_t<decltype(data)>;
@@ -536,7 +592,7 @@ void Serialize(const Value& value, std::ostream& out) {
     } else if constexpr (std::is_same_v<Type, Value::Blob>) {
       Serialize(FormatMarker::Blob, out);
     } else {
-      static_assert(kAlwaysFalse<Type>, "unknown type");
+      static_assert(sizeof(Type) != sizeof(Type), "unknown type");
     }
 
     Serialize(data, out);

@@ -113,7 +113,16 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
-class NodeData {
+class NonCopyableMovable {
+ public:
+  NonCopyableMovable() = default;
+  NonCopyableMovable(const NonCopyableMovable&) = delete;
+  NonCopyableMovable(NonCopyableMovable&&) = delete;
+  NonCopyableMovable& operator=(NonCopyableMovable&&) = delete;
+  NonCopyableMovable& operator=(const NonCopyableMovable&) = delete;
+};
+
+class NodeData : NonCopyableMovable {
  public:
   using Key = std::string;
   using Value = Value;
@@ -122,10 +131,6 @@ class NodeData {
   using List = std::vector<Ptr>;
 
  public:
-  // NodeData() = default;
-  NodeData& operator=(NodeData&&) = delete;
-  NodeData& operator=(const NodeData&) = delete;
-
   virtual ~NodeData() = default;
 
   /// Reads value by key
@@ -179,7 +184,7 @@ class NodeData {
 };
 
 template <typename NodeFamily>
-class Node {
+class Node : NonCopyableMovable {
  public:
   using Name = std::string;
   using Path = std::vector<Name>;
@@ -194,8 +199,8 @@ class Node {
   virtual Node::Ptr Create(const Name& name) = 0;
 
   /// @brief Searches node by name amoung children
-  /// @return nullptr if node is not found, otherwise pointer to node
-  /// todo wrap to optional, do not spread nullptrs on code
+  /// @return invalid node (IsValid returns false) if node is not found,
+  /// otherwise pointer to node
   virtual Node::Ptr Find(const Name& name) const = 0;
 
   /// @brief Removes link to child node by name
@@ -211,6 +216,9 @@ class Node {
 
   /// @brief Retrieves data for current node
   virtual NodeData::Ptr Open() const = 0;
+
+  /// Returns false if node not exist, otherwise true
+  virtual bool IsValid() const = 0;
 };
 
 class VolumeNode : public Node<VolumeNode> {};
@@ -234,8 +242,6 @@ class StorageNode : public Node<StorageNode> {
   /// @note mount does not make side-effects to current node
   [[nodiscard]] virtual Ptr Mount(const VolumeNode::Ptr& node) const = 0;
 };
-
-/// todo GoTo(path)
 
 VolumeNode::Ptr CreateVolume();
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);

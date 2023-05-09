@@ -20,10 +20,10 @@ TEST(Volume, SaveLoadData) {
   d->Write("string", "Ю");
   d->Write("blob", Value::Blob{1, 2, 3, 4});
 
-  Save(v, "bin/data.bin");
+  Save(v, "data.bin");
 
   auto v2 = CreateVolume();
-  Load(v2, "bin/data.bin");
+  Load(v2, "data.bin");
   auto d2 = v2->Open();
   EXPECT_EQ(d2->Read<bool>("bool"), true);
   EXPECT_EQ(d2->Read<char>("char"), 'y');
@@ -51,10 +51,10 @@ TEST(Volume, SaveLoadHierarchy) {
   c1->Open()->Write("name", 1);
   c22->Open()->Write("name", 22);
   c12->Open()->Write("name", 12);
-  Save(v1, "bin/hierarchy.bin");
+  Save(v1, "hierarchy.bin");
 
   auto v2 = CreateVolume();
-  Load(v2, "bin/hierarchy.bin");
+  Load(v2, "hierarchy.bin");
 
   ASSERT_TRUE(v2->Find("c1"));
   ASSERT_TRUE(v2->Find("c1")->Find("c11"));
