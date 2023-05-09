@@ -21,20 +21,20 @@ TEST(VolumeNodeData, ReadWrite) {
   d->Write("string", "Ю");
   d->Write("blob", Value::Blob{1, 2, 3, 4});
 
-  EXPECT_EQ(d->Read("bool").As<bool>(), true);
-  EXPECT_EQ(d->Read("char").As<char>(), 'y');
-  EXPECT_EQ(d->Read("unsigned char").As<unsigned char>(), 'h');
-  EXPECT_EQ(d->Read("int16").As<int16_t>(), -32);
-  EXPECT_EQ(d->Read("uint16").As<uint16_t>(), 48);
-  EXPECT_EQ(d->Read("int32").As<int32_t>(), -35000);
-  EXPECT_EQ(d->Read("uint32").As<uint32_t>(), 10004u);
-  EXPECT_EQ(d->Read("int64").As<int64_t>(), -10000000l);
-  EXPECT_EQ(d->Read("uin64").As<uint64_t>(), 1000456ul);
-  EXPECT_DOUBLE_EQ(d->Read("float").As<float>(), 23.567f);
-  EXPECT_DOUBLE_EQ(d->Read("double").As<double>(), 1234.567678);
-  EXPECT_EQ(d->Read("string").As<std::string>(), "Ю");
-  EXPECT_EQ(d->Read("blob").As<Value::Blob>(), (Value::Blob{1, 2, 3, 4}));
-  EXPECT_EQ(d->Read("uint32").As<uint32_t>(), 10004u);
+  EXPECT_EQ(d->Read<bool>("bool"), true);
+  EXPECT_EQ(d->Read<char>("char"), 'y');
+  EXPECT_EQ(d->Read<unsigned char>("unsigned char"), 'h');
+  EXPECT_EQ(d->Read<int16_t>("int16"), -32);
+  EXPECT_EQ(d->Read<uint16_t>("uint16"), 48);
+  EXPECT_EQ(d->Read<int32_t>("int32"), -35000);
+  EXPECT_EQ(d->Read<uint32_t>("uint32"), 10004u);
+  EXPECT_EQ(d->Read<int64_t>("int64"), -10000000l);
+  EXPECT_EQ(d->Read<uint64_t>("uin64"), 1000456ul);
+  EXPECT_DOUBLE_EQ(*d->Read<float>("float"), 23.567f);
+  EXPECT_DOUBLE_EQ(*d->Read<double>("double"), 1234.567678);
+  EXPECT_EQ(d->Read<std::string>("string"), "Ю");
+  EXPECT_EQ(d->Read<Value::Blob>("blob"), (Value::Blob{1, 2, 3, 4}));
+  EXPECT_EQ(d->Read<uint32_t>("uint32"), 10004u);
 }
 
 TEST(VolumeNodeData, Enumerate) {
@@ -50,9 +50,9 @@ TEST(VolumeNodeData, Enumerate) {
   std::sort(fields.begin(), fields.end(), by_key);
   ASSERT_EQ(fields.size(), 2);
   EXPECT_EQ(fields[0].first, "good");
-  EXPECT_EQ(fields[0].second.As<std::string>(), "buy");
+  EXPECT_EQ(*fields[0].second.Try<std::string>(), "buy");
   EXPECT_EQ(fields[1].first, "hello");
-  EXPECT_EQ(fields[1].second.As<std::string>(), "world");
+  EXPECT_EQ(*fields[1].second.Try<std::string>(), "world");
 }
 
 TEST(VolumeNodeData, EnumerateExcludeRemoved) {
@@ -70,22 +70,22 @@ TEST(VolumeNodeData, EnumerateExcludeRemoved) {
 TEST(VolumeNodeData, ValueCheck) {
   auto v = CreateVolume();
   auto d = v->Open();
-  EXPECT_FALSE(d->Read("hello").Has());
+  EXPECT_FALSE(d->Read("hello"));
   d->Write("hello", "world");
-  const auto* str_value = d->Read("hello").Try<std::string>();
-  ASSERT_TRUE(str_value);
+  const auto str_value = d->Read<std::string>("hello");
+  ASSERT_TRUE(str_value.has_value());
   EXPECT_EQ(*str_value, "world");
-  const auto* int_value = d->Read("hello").Try<int>();
-  EXPECT_EQ(int_value, nullptr);
+  const auto int_value = d->Read<int>("hello");
+  EXPECT_FALSE(int_value.has_value());
 }
 
 TEST(VolumeNodeData, Remove) {
   auto v = CreateVolume();
   auto d = v->Open();
   d->Write("hello", "world");
-  EXPECT_TRUE(d->Read("hello").Has());
+  EXPECT_TRUE(d->Read("hello"));
   EXPECT_TRUE(d->Remove("hello"));
-  EXPECT_FALSE(d->Read("hello").Has());
+  EXPECT_FALSE(d->Read("hello"));
   EXPECT_FALSE(d->Remove("hello"));
 }
 
@@ -93,15 +93,14 @@ TEST(VolumeNodeData, ReadUnknown) {
   auto v = CreateVolume();
   auto d = v->Open();
   auto uk = d->Read("unknown");
-  EXPECT_FALSE(uk.Has());
-  EXPECT_THROW(uk.As<std::string>(), std::exception);
+  EXPECT_FALSE(uk.has_value());
 }
 
 TEST(VolumeNodeData, Accept) {
   auto d = CreateVolume()->Open();
   d->Write("number", 42);
   int num = 0;
-  d->Read("number").Accept([&num](const auto& data) {
+  d->Read("number")->Accept([&num](const auto& data) {
     using Type = std::decay_t<decltype(data)>;
     if constexpr (std::is_same_v<Type, int>) {
       num = data;
@@ -111,22 +110,23 @@ TEST(VolumeNodeData, Accept) {
   EXPECT_EQ(num, 42);
 
   bool checked = false;
-  d->Read("unknown").Accept([&checked](const auto& data) {
-    using Type = std::decay_t<decltype(data)>;
-    if constexpr (std::is_same_v<Type, std::monostate>) {
-      checked = true;
-    }
-  });
+  EXPECT_FALSE(d->Read("unknown").has_value());
+}
 
-  EXPECT_TRUE(checked);
+TEST(VolumeNodeData, Rewrites) {
+  auto d = CreateVolume()->Open();
+  d->Write("number", 42);
+  EXPECT_EQ(d->Read<int>("number"), 42);
+  d->Write("number", 54);
+  EXPECT_EQ(d->Read<int>("number"), 54);
 }
 
 TEST(VolumeNodeData, ChangeType) {
   auto d = CreateVolume()->Open();
   d->Write("number", 42);
-  EXPECT_EQ(d->Read("number").As<int>(), 42);
+  EXPECT_EQ(d->Read<int>("number"), 42);
   d->Write("number", "string number");
-  EXPECT_EQ(d->Read("number").As<std::string>(), "string number");
+  EXPECT_EQ(d->Read<std::string>("number"), "string number");
 }
 
 TEST(VolumeNodeData, ValueOut) {
@@ -163,11 +163,11 @@ TEST(VolumeNode, ChildrenEnumerate) {
   std::sort(children.begin(), children.end(), by_name);
   ASSERT_EQ(children.size(), 3);
   EXPECT_EQ(children[0]->GetName(), "c1");
-  EXPECT_EQ(children[0]->Open()->Read("text").As<std::string>(), "t1");
+  EXPECT_EQ(children[0]->Open()->Read<std::string>("text"), "t1");
   EXPECT_EQ(children[1]->GetName(), "c2");
-  EXPECT_EQ(children[1]->Open()->Read("text").As<std::string>(), "t2");
+  EXPECT_EQ(children[1]->Open()->Read<std::string>("text"), "t2");
   EXPECT_EQ(children[2]->GetName(), "c3");
-  EXPECT_EQ(children[2]->Open()->Read("text").As<std::string>(), "t3");
+  EXPECT_EQ(children[2]->Open()->Read<std::string>("text"), "t3");
 }
 
 TEST(VolumeNode, ChildrenEnumerateExludeUnlinked) {
@@ -198,7 +198,7 @@ TEST(VolumeNode, ChildrenUnlink) {
   v->Unlink("c1");
   EXPECT_FALSE(v->Find("c1"));
   EXPECT_TRUE(c1->Find("c2"));
-  EXPECT_EQ(c1->Open()->Read("num").As<int>(), 32);
+  EXPECT_EQ(c1->Open()->Read<int>("num"), 32);
 }
 
 TEST(VolumeNode, CreateExisting) {
@@ -208,7 +208,7 @@ TEST(VolumeNode, CreateExisting) {
 
   auto c1 = v->Find("c1");
   EXPECT_TRUE(c1->Find("c2"));
-  EXPECT_EQ(c1->Open()->Read("num").As<int>(), 38);
+  EXPECT_EQ(c1->Open()->Read<int>("num"), 38);
 }
 
 TEST(StorageNode, MountsVolumeNodes) {
@@ -230,25 +230,6 @@ TEST(StorageNode, MountsVolumeNodes) {
   EXPECT_TRUE(s2->Find("second"));
 }
 
-TEST(StorageNode, EnumeratesSuperposition) {
-  auto v1 = CreateVolume();
-  auto v2 = CreateVolume();
-
-  v1->Create("first");
-  v2->Create("second");
-
-  auto s = MountStorage(v1)->Mount(v2);
-  auto children = s->Enumerate();
-  auto by_name = [](const auto& lhs, const auto& rhs) {
-    return lhs->GetName() < rhs->GetName();
-  };
-
-  std::sort(children.begin(), children.end(), by_name);
-  ASSERT_EQ(children.size(), 2);
-  EXPECT_EQ(children[0]->GetName(), "first");
-  EXPECT_EQ(children[1]->GetName(), "second");
-}
-
 TEST(StorageNode, CreateUseExisting) {
   auto v1 = CreateVolume();
   auto v2 = CreateVolume();
@@ -260,11 +241,11 @@ TEST(StorageNode, CreateUseExisting) {
   ASSERT_TRUE(n1);
 
   auto d1 = n1->Open();
-  EXPECT_EQ(d1->Read("num").As<int>(), 42);
+  EXPECT_EQ(d1->Read<int>("num"), 42);
 
   auto s = MountStorage(v1)->Mount(v2);
   auto sd1 = s->Create("first")->Open();
-  EXPECT_EQ(sd1->Read("num").As<int>(), 42);
+  EXPECT_EQ(sd1->Read<int>("num"), 42);
 }
 
 TEST(StorageNode, LiveAfterUnlink) {
@@ -275,7 +256,7 @@ TEST(StorageNode, LiveAfterUnlink) {
   v->Unlink("child");
 
   EXPECT_FALSE(v->Find("child"));
-  EXPECT_EQ(s->Open()->Read("num").As<int>(), 33);
+  EXPECT_EQ(s->Open()->Read<int>("num"), 33);
 }
 
 TEST(StorageNode, MountSubtree) {
@@ -300,23 +281,23 @@ TEST(StorageNode, LayerRead) {
   /// single layer
   auto s = MountStorage(v1);
   auto d1 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d1->Read("from").As<std::string>(), "v1");
+  EXPECT_EQ(d1->Read<std::string>("from"), "v1");
 
   // second layer
   auto m = s->Find("i")->Mount(v2);
   auto d2 = m->Find("c1")->Open();
-  EXPECT_EQ(d2->Read("from").As<std::string>(), "v2");
+  EXPECT_EQ(d2->Read<std::string>("from"), "v2");
 
   // global effect
   auto d3 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d3->Read("from").As<std::string>(), "v2");
+  EXPECT_EQ(d3->Read<std::string>("from"), "v2");
 
   m.reset();  // unmount
   auto d4 = s->Find("i")->Find("c1")->Open();
-  EXPECT_EQ(d4->Read("from").As<std::string>(), "v1");
+  EXPECT_EQ(d4->Read<std::string>("from"), "v1");
 
   // no side-effects
-  EXPECT_EQ(d2->Read("from").As<std::string>(), "v2");
+  EXPECT_EQ(d2->Read<std::string>("from"), "v2");
 }
 
 TEST(StorageNode, UnlinkAll) {
@@ -356,8 +337,8 @@ TEST(StorageNode, EnumerateAggregation) {
   EXPECT_EQ(children[2]->GetName(), "c");
 
   auto d = children[2]->Open();
-  EXPECT_EQ(d->Read("num1").As<int>(), 1);
-  EXPECT_EQ(d->Read("num2").As<int>(), 2);
+  EXPECT_EQ(d->Read<int>("num1"), 1);
+  EXPECT_EQ(d->Read<int>("num2"), 2);
 }
 
 TEST(StorageNodeData, ValueSideEffects) {
@@ -367,8 +348,8 @@ TEST(StorageNodeData, ValueSideEffects) {
   auto s = MountStorage(v);
   s->Open()->Write("num", 35);
 
-  EXPECT_EQ(v->Open()->Read("num").As<int>(), 35);
-  EXPECT_EQ(s->Open()->Read("num").As<int>(), 35);
+  EXPECT_EQ(v->Open()->Read<int>("num"), 35);
+  EXPECT_EQ(s->Open()->Read<int>("num"), 35);
 }
 
 TEST(StorageNodeData, WriteNewToTopLayer) {
@@ -378,8 +359,8 @@ TEST(StorageNodeData, WriteNewToTopLayer) {
   auto s = MountStorage(v1)->Mount(v2);
   s->Open()->Write("num", 35);
 
-  EXPECT_FALSE(v1->Open()->Read("num").Has());
-  EXPECT_EQ(v2->Open()->Read("num").As<int>(), 35);
+  EXPECT_FALSE(v1->Open()->Read("num").has_value());
+  EXPECT_EQ(v2->Open()->Read<int>("num"), 35);
 }
 
 TEST(StorageNodeData, RemoveFromAllLayers) {
@@ -389,9 +370,9 @@ TEST(StorageNodeData, RemoveFromAllLayers) {
   v2->Open()->Write("num", 2);
 
   auto s = MountStorage(v1)->Mount(v2);
-  EXPECT_EQ(s->Open()->Read("num").As<int>(), 2);
+  EXPECT_EQ(s->Open()->Read<int>("num"), 2);
   EXPECT_TRUE(s->Open()->Remove("num"));
-  EXPECT_FALSE(s->Open()->Read("num").Has());
+  EXPECT_FALSE(s->Open()->Read("num").has_value());
   EXPECT_FALSE(s->Open()->Remove("num"));
 }
 
@@ -401,7 +382,7 @@ TEST(StorageNodeData, EnumerateValues) {
   v1->Open()->Write("num2", 3);
 
   auto v2 = CreateVolume();
-  v1->Open()->Write("num2", 2);
+  v2->Open()->Write("num2", 2);
 
   auto v3 = CreateVolume();
 
@@ -416,7 +397,7 @@ TEST(StorageNodeData, EnumerateValues) {
   std::sort(kv.begin(), kv.end(), by_key);
   ASSERT_EQ(kv.size(), 2);
   EXPECT_EQ(kv[0].first, "num1");
-  EXPECT_EQ(kv[0].second.As<int>(), 1);
+  EXPECT_EQ(*kv[0].second.Try<int>(), 1);
   EXPECT_EQ(kv[1].first, "num2");
-  EXPECT_EQ(kv[1].second.As<int>(), 2);
+  EXPECT_EQ(*kv[1].second.Try<int>(), 2);
 }

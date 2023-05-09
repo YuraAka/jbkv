@@ -10,16 +10,24 @@
 #include <list>
 #include <iomanip>
 
+/**
+ todo:
+ - ref string/blob
+ - permanent deletion of marked for deletion
+ -
+ *
+ */
+
 namespace jbkv {
 
 class Value {
  public:
   using Blob = std::vector<uint8_t>;
-  using Data = std::variant<std::monostate, bool, char, unsigned char, uint16_t,
-                            int16_t, uint32_t, int32_t, uint64_t, int64_t,
-                            float, double, std::string, Blob>;
+  using Data = std::variant<bool, char, unsigned char, uint16_t, int16_t,
+                            uint32_t, int32_t, uint64_t, int64_t, float, double,
+                            std::string, Blob>;
 
-  Value() = default;
+  // Value() = default;
   explicit Value(Data&& data)
       : data_(std::move(data)) {
   }
@@ -29,35 +37,12 @@ class Value {
   }
 
   template <typename T>
-  const T& As() const {
-    auto data_ptr = Try<T>();
-    if (!data_ptr) {
-      throw std::runtime_error("cannot get value of given type");
-    }
-
-    return *data_ptr;
-  }
-
-  template <typename T>
   const T* Try() const {
-    if (!Has()) {
-      /// empty value
-      return nullptr;
-    }
-
     return std::get_if<T>(&data_);
-  }
-
-  bool Has() const {
-    return data_.index() != 0;
   }
 
   void Accept(const auto& visitor) const {
     std::visit(visitor, data_);
-  }
-
-  static Value NotSet() {
-    return {};
   }
 
  private:
@@ -67,9 +52,7 @@ class Value {
 inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   value.Accept([&os](const auto& data) {
     using T = std::remove_cvref_t<decltype(data)>;
-    if constexpr (std::is_same_v<T, std::monostate>) {
-      os << "<not-set>";
-    } else if constexpr (std::is_same_v<T, Value::Blob>) {
+    if constexpr (std::is_same_v<T, Value::Blob>) {
       os << std::hex;
       for (const auto byte : data) {
         os << byte;
@@ -96,7 +79,7 @@ class NodeData {
  public:
   virtual ~NodeData() = default;
 
-  virtual Value Read(const Key& key) const = 0;
+  virtual std::optional<Value> Read(const Key& key) const = 0;
   virtual void Write(const Key& key, Value&& value) = 0;
   virtual bool Remove(const Key& key) = 0;
 
@@ -109,15 +92,20 @@ class NodeData {
     Write(key, Value(value));
   }
 
+  /// monadic Read
   template <typename T>
   std::optional<T> Read(const Key& key) {
     const auto value = Read(key);
-    const auto* value_ptr = value.template Try<T>();
-    if (!value_ptr) {
+    if (!value) {
       return std::nullopt;
     }
 
-    return *value_ptr;
+    const auto* mb_data = value->Try<T>();
+    if (!mb_data) {
+      return std::nullopt;
+    }
+
+    return *mb_data;
   }
 };
 

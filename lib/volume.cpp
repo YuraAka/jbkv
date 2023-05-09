@@ -26,11 +26,11 @@ const std::string kRootName = "/";
 
 class VolumeNodeData final : public NodeData {
  public:
-  Value Read(const Key& key) const override {
+  std::optional<Value> Read(const Key& key) const override {
     std::shared_lock lock(mutex_);
     const auto it = data_.find(key);
     if (it == data_.end()) {
-      return {};
+      return std::nullopt;
     }
 
     return it->second;
@@ -38,18 +38,12 @@ class VolumeNodeData final : public NodeData {
 
   void Write(const Key& key, Value&& value) override {
     std::lock_guard lock(mutex_);
-    data_[key] = std::move(value);
+    data_.insert_or_assign(key, std::move(value));
   }
 
   bool Remove(const Key& key) override {
-    std::shared_lock lock(mutex_);
-    const auto it = data_.find(key);
-    if (it == data_.end() || !it->second.Has()) {
-      return false;
-    }
-
-    it->second = Value();
-    return true;
+    std::lock_guard lock(mutex_);
+    return data_.erase(key) == 1;
   }
 
   KeyValueList Enumerate() const override {
@@ -57,9 +51,7 @@ class VolumeNodeData final : public NodeData {
     KeyValueList result;
     result.reserve(data_.size());
     for (const auto& [key, value] : data_) {
-      if (value.Has()) {
-        result.push_back({key, value});
-      }
+      result.push_back({key, value});
     }
 
     return result;
@@ -78,22 +70,22 @@ class StorageNodeData final : public NodeData {
   }
 
  public:
-  Value Read(const Key& key) const override {
+  std::optional<Value> Read(const Key& key) const override {
     for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
       const auto& layer = *it;
       auto value = layer->Read(key);
-      if (value.Has()) {
+      if (value) {
         return value;
       }
     }
 
-    return Value::NotSet();
+    return std::nullopt;
   }
 
   void Write(const Key& key, Value&& value) override {
     for (auto it = layers_.rbegin(); it != layers_.rend(); ++it) {
       const auto& layer = *it;
-      if (layer->Read(key).Has()) {
+      if (layer->Read(key)) {  // todo update?
         layer->Write(key, std::move(value));
         return;
       }
@@ -485,10 +477,6 @@ void Deserialize(T& value, std::istream& in) {
   in.read(reinterpret_cast<char*>(&value), sizeof(value));
 }
 
-void Serialize(std::monostate, std::ostream&) {
-  assert(false && "unreachable");
-}
-
 template <typename T>
 constexpr bool kAlwaysFalse = false;
 
@@ -521,8 +509,6 @@ void Serialize(const Value& value, std::ostream& out) {
       Serialize(FormatMarker::String, out);
     } else if constexpr (std::is_same_v<Type, Value::Blob>) {
       Serialize(FormatMarker::Blob, out);
-    } else if constexpr (std::is_same_v<Type, std::monostate>) {
-      return;
     } else {
       static_assert(kAlwaysFalse<Type>, "unknown type");
     }
@@ -531,86 +517,86 @@ void Serialize(const Value& value, std::ostream& out) {
   });
 }
 
-void Deserialize(Value& value, std::istream& in) {
+void Deserialize(std::optional<Value>& value, std::istream& in) {
   FormatMarker marker;
   Deserialize(marker, in);
   switch (marker) {
     case FormatMarker::Bool: {
       bool data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Char: {
       char data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::UChar: {
       unsigned char data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::UInt16: {
       uint16_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Int16: {
       int16_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::UInt32: {
       uint32_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Int32: {
       int32_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::UInt64: {
       uint64_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Int64: {
       int64_t data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Float: {
       float data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Double: {
       double data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::String: {
       std::string data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     case FormatMarker::Blob: {
       Value::Blob data = {};
       Deserialize(data, in);
-      value = Value(data);
+      value.emplace(data);
       break;
     }
     default:
@@ -633,11 +619,6 @@ void CheckSum(T value, uint8_t& checksum) {
   for (size_t i = 0; i < sizeof(value); ++i) {
     checksum ^= *(reinterpret_cast<uint8_t*>(&value) + i);
   }
-}
-
-/// todo think about how to avoid monostate handling?
-void CheckSum(std::monostate, uint8_t&) {
-  assert(false && "unreachable");
 }
 
 void CheckSum(const Value& value, uint8_t checksum) {
@@ -726,12 +707,12 @@ class VolumeLoader {
     Deserialize(kv_size, stream_);
     for (size_t i = 0; i < kv_size; ++i) {
       NodeData::Key key;
-      NodeData::Value value;
+      std::optional<NodeData::Value> value;
       Deserialize(key, stream_);
       Deserialize(value, stream_);
-      data->Write(key, std::move(value));
+      data->Write(key, std::move(*value));
       CheckSum(key, checksum);
-      CheckSum(value, checksum);
+      CheckSum(*value, checksum);
     }
 
     uint8_t actual_checksum = 0;

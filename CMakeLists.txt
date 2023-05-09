@@ -34,19 +34,6 @@ add_library(lib-jbkv STATIC
     lib/volume.h
 )
 
-add_executable(example
-  example/main.cpp
-)
-
-target_include_directories(example PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_link_libraries(
-  example PRIVATE
-  lib-jbkv
-)
-
 add_executable(unittest
   tests/unit.cpp
 )
