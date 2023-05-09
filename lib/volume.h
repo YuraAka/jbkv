@@ -58,10 +58,12 @@ class Value {
 
   explicit Value(Data&& data)
       : data_(std::move(data)) {
+    CheckLimits();
   }
 
   explicit Value(const char* data)
       : data_(String(data)) {
+    CheckLimits();
   }
 
   template <typename T>
@@ -71,6 +73,21 @@ class Value {
 
   void Accept(const auto& visitor) const {
     std::visit(visitor, data_);
+  }
+
+ private:
+  void CheckLimits() const {
+    Accept([](const auto& data) {
+      using T = std::remove_cvref_t<decltype(data)>;
+      if constexpr (std::is_same_v<T, Value::Blob> ||
+                    std::is_same_v<T, Value::String>) {
+        if (data.Ref().size() > std::numeric_limits<uint32_t>::max()) {
+          throw std::runtime_error(
+              "Value is too big which drops x86 platform support: " +
+              std::to_string(data.Ref().size()));
+        }
+      }
+    });
   }
 
  private:

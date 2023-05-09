@@ -18,6 +18,7 @@
 #include <assert.h>
 #include <stdexcept>
 #include <functional>
+#include <limits>
 // todo clear includes
 
 namespace {
@@ -456,13 +457,13 @@ void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
-  uint64_t size = value.size();
+  uint32_t size = value.size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
   out.write(value.data(), size);
 }
 
 void Deserialize(std::string& value, std::istream& in) {
-  uint64_t size = 0;
+  uint32_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
 
   value.resize(size);
@@ -478,13 +479,13 @@ void Deserialize(Value::String& value, std::istream& in) {
 }
 
 void Serialize(const Value::Blob& value, std::ostream& out) {
-  uint64_t size = value.Ref().size();
+  uint32_t size = value.Ref().size();
   out.write(reinterpret_cast<const char*>(&size), sizeof(size));
   out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size);
 }
 
 void Deserialize(Value::Blob& value, std::istream& in) {
-  uint64_t size = 0;
+  uint32_t size = 0;
   in.read(reinterpret_cast<char*>(&size), sizeof(size));
   value.Ref().resize(size);
   in.read(reinterpret_cast<char*>(&value.Ref()[0]), size);

@@ -2,6 +2,7 @@
 mkdir build
 cd build
 cmake ..
-%MSBUILD_DIR%\msbuild jbkv.sln
-echo
-echo "SUCCESS! Find your binaries are in ./build/bin"
+rem %MSBUILD_DIR%\msbuild jbkv.sln /p:Platform=x64
+%MSBUILD_DIR%\msbuild jbkv.sln /p:Platform=Win32
+cd ..
+echo "SUCCESS! Find your binaries are in build\bin\Release"
