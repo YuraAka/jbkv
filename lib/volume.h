@@ -125,7 +125,6 @@ class NonCopyableMovable {
 class NodeData : NonCopyableMovable {
  public:
   using Key = std::string;
-  using Value = Value;
   using KeyValueList = std::vector<std::pair<Key, Value>>;
   using Ptr = std::shared_ptr<NodeData>;
   using List = std::vector<Ptr>;

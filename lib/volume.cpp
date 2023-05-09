@@ -26,33 +26,29 @@ class InvalidNode : public Parent {
   using typename Parent::List;
   using typename Parent::Name;
   using typename Parent::Ptr;
+  static constexpr auto kError = "Node is not valid";
 
  public:
   Ptr Create(const Name&) override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   Ptr Find(const Name&) const override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   bool Unlink(const Name&) override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   List Enumerate() const override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   const Name& GetName() const override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   NodeData::Ptr Open() const override {
-    Throw();
+    throw std::runtime_error(kError);
   }
   bool IsValid() const override {
     return false;
-  }
-
- protected:
-  [[noreturn]] void Throw() const {
-    throw std::runtime_error("Node is not valid");
   }
 };
 
@@ -67,7 +63,7 @@ class NullVolumeNode final : public InvalidNode<VolumeNode> {
 class NullStorageNode final : public InvalidNode<StorageNode> {
  public:
   Ptr Mount(const VolumeNode::Ptr&) const override {
-    Throw();
+    throw std::runtime_error(kError);
   }
 
  public:
@@ -798,7 +794,7 @@ class VolumeLoader {
     Deserialize(kv_size, stream_);
     for (size_t i = 0; i < kv_size; ++i) {
       NodeData::Key key;
-      std::optional<NodeData::Value> value;
+      std::optional<Value> value;
       Deserialize(key, stream_);
       Deserialize(value, stream_);
       CheckSum(key, checksum);
