@@ -17,6 +17,7 @@
 #include <deque>
 #include <assert.h>
 #include <stdexcept>
+#include <functional>
 // todo clear includes
 
 namespace {
