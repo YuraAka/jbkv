@@ -377,6 +377,10 @@ class StorageNodeImpl final : public StorageNode {
   /// StorageNode interface
  public:
   Ptr Mount(const VolumeNode::Ptr& node) const override {
+    if (!node) {
+      throw std::runtime_error("Unable to mount: node is nullptr");
+    }
+
     auto mount = std::make_shared<MountPoint>(node, mount_);
     auto layers = layers_;
     layers.push_back(node);
@@ -500,30 +504,36 @@ enum class FormatMarker : uint8_t {
 constexpr uint8_t kFormatVersion = 1;
 constexpr std::string_view kMagic = "jbkv";
 
+void Check(std::ios& stream) {
+  if (!stream.good()) {
+    throw std::runtime_error("Bad stream");
+  }
+}
+
 void SerializeHeader(std::ostream& out) {
-  out.write(kMagic.data(), kMagic.size());
-  out.write(reinterpret_cast<const char*>(&kFormatVersion),
-            sizeof(kFormatVersion));
+  Check(out.write(kMagic.data(), kMagic.size()));
+  Check(out.write(reinterpret_cast<const char*>(&kFormatVersion),
+                  sizeof(kFormatVersion)));
 }
 
 void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
   magic.resize(kMagic.size());
-  in.read(&magic[0], magic.size());
-  in.read(reinterpret_cast<char*>(&version), sizeof(version));
+  Check(in.read(&magic[0], magic.size()));
+  Check(in.read(reinterpret_cast<char*>(&version), sizeof(version)));
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
   uint64_t size = value.size();
-  out.write(reinterpret_cast<const char*>(&size), sizeof(size));
-  out.write(value.data(), size);
+  Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
+  Check(out.write(value.data(), size));
 }
 
 void Deserialize(std::string& value, std::istream& in) {
   uint64_t size = 0;
-  in.read(reinterpret_cast<char*>(&size), sizeof(size));
+  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
 
   value.resize(size);
-  in.read(&value[0], size);
+  Check(in.read(&value[0], size));
 }
 
 void Serialize(const Value::String& value, std::ostream& out) {
@@ -536,27 +546,27 @@ void Deserialize(Value::String& value, std::istream& in) {
 
 void Serialize(const Value::Blob& value, std::ostream& out) {
   uint64_t size = value.Ref().size();
-  out.write(reinterpret_cast<const char*>(&size), sizeof(size));
-  out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size);
+  Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
+  Check(out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size));
 }
 
 void Deserialize(Value::Blob& value, std::istream& in) {
   uint64_t size = 0;
-  in.read(reinterpret_cast<char*>(&size), sizeof(size));
+  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
   value.Ref().resize(size);
-  in.read(reinterpret_cast<char*>(&value.Ref()[0]), size);
+  Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), size));
 }
 
 template <typename T>
   requires std::is_scalar_v<T>
 void Serialize(T value, std::ostream& out) {
-  out.write(reinterpret_cast<char*>(&value), sizeof(value));
+  Check(out.write(reinterpret_cast<char*>(&value), sizeof(value)));
 }
 
 template <typename T>
   requires std::is_scalar_v<T>
 void Deserialize(T& value, std::istream& in) {
-  in.read(reinterpret_cast<char*>(&value), sizeof(value));
+  Check(in.read(reinterpret_cast<char*>(&value), sizeof(value)));
 }
 
 void Serialize(const Value& value, std::ostream& out) {
@@ -792,10 +802,10 @@ class VolumeLoader {
       data->Write(key, std::move(*value));
     }
 
-    uint8_t actual_checksum = 0;
-    Deserialize(actual_checksum, stream_);
-    if (checksum != actual_checksum) {
-      throw std::runtime_error("File corrupted");
+    uint8_t stream_checksum = 0;
+    Deserialize(stream_checksum, stream_);
+    if (checksum != stream_checksum) {
+      throw std::runtime_error("Data corrupted");
     }
   }
 
@@ -820,6 +830,10 @@ VolumeNode::Ptr jbkv::CreateVolume() {
 }
 
 StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
+  if (!node) {
+    throw std::runtime_error("Unable to mount: node is nullptr");
+  }
+
   VolumeNode::List nodes{node};
   const auto meta = StorageNodeMetadata::Create(kRootName);
   return std::make_shared<StorageNodeImpl>(meta, std::move(nodes));

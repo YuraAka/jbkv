@@ -38,7 +38,6 @@ TEST(VolumeNodeData, ReadWrite) {
   EXPECT_EQ(d->Read<uint32_t>("uint32"), 10004u);
 }
 
-/// todo too big value test
 TEST(VolumeNodeData, Enumerate) {
   auto v = CreateVolume();
   auto d = v->Open();
@@ -169,6 +168,18 @@ TEST(VolumeNode, ChildrenAddFind) {
   EXPECT_TRUE(v->Find("child2")->IsValid());
 }
 
+TEST(VolumeNode, FindInvalid) {
+  auto v = CreateVolume();
+  auto c = v->Find("child");
+  EXPECT_FALSE(c->IsValid());
+  EXPECT_THROW(c->Find("smth"), std::exception);
+  EXPECT_THROW(c->Create("smth"), std::exception);
+  EXPECT_THROW(c->Enumerate(), std::exception);
+  EXPECT_THROW(c->GetName(), std::exception);
+  EXPECT_THROW(c->Open(), std::exception);
+  EXPECT_THROW(c->Unlink("smth"), std::exception);
+}
+
 TEST(VolumeNode, ChildrenEnumerate) {
   auto v = CreateVolume();
   v->Create("c1")->Open()->Write("text", "t1");
@@ -230,6 +241,97 @@ TEST(VolumeNode, CreateExisting) {
   EXPECT_EQ(c1->Open()->Read<int>("num"), 38);
 }
 
+TEST(VolumeNode, SaveLoadThrowsOnTruncated) {
+  auto v = CreateVolume();
+  auto d = v->Open();
+  d->Write("string", Value::String(std::string(100, 'a')));
+
+  std::stringstream stream;
+  Save(v, stream);
+
+  // truncate
+  auto data = stream.str();
+  std::stringstream trunc;
+  trunc.write(data.data(), 50);
+
+  auto v2 = CreateVolume();
+  EXPECT_THROW(Load(v2, trunc), std::exception);
+}
+
+TEST(VolumeNode, SaveLoadDataInMemory) {
+  auto v = CreateVolume();
+  auto d = v->Open();
+  d->Write("bool", true);
+  d->Write("char", 'y');
+  d->Write("unsigned char", (unsigned char)'h');
+  d->Write("int16", (int16_t)-32);
+  d->Write("uint16", (uint16_t)48);
+  d->Write("int32", (int32_t)-35000);
+  d->Write("uint32", (uint32_t)10004);
+  d->Write("int64", (int64_t)-10000000);
+  d->Write("uin64", (uint64_t)1000456);
+  d->Write("float", 23.567f);
+  d->Write("double", 1234.567678);
+  d->Write("string", "Ю");
+  d->Write("blob", Value::Blob{1, 2, 3, 4});
+
+  std::stringstream stream;
+  Save(v, stream);
+
+  auto v2 = CreateVolume();
+  Load(v2, stream);
+  auto d2 = v2->Open();
+  EXPECT_EQ(d2->Read<bool>("bool"), true);
+  EXPECT_EQ(d2->Read<char>("char"), 'y');
+  EXPECT_EQ(d2->Read<unsigned char>("unsigned char"), 'h');
+  EXPECT_EQ(d2->Read<int16_t>("int16"), -32);
+  EXPECT_EQ(d2->Read<uint16_t>("uint16"), 48);
+  EXPECT_EQ(d2->Read<int32_t>("int32"), -35000);
+  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004);
+  EXPECT_EQ(d2->Read<int64_t>("int64"), -10000000);
+  EXPECT_EQ(d2->Read<uint64_t>("uin64"), 1000456);
+  EXPECT_DOUBLE_EQ(*d2->Read<float>("float"), 23.567f);
+  EXPECT_DOUBLE_EQ(*d2->Read<double>("double"), 1234.567678);
+  EXPECT_EQ(d2->Read<Value::String>("string"), "Ю");
+  EXPECT_EQ(d2->Read<Value::Blob>("blob"), (Value::Blob{1, 2, 3, 4}));
+  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004u);
+}
+
+TEST(VolumeNode, SaveLoadHierarchyInMemory) {
+  auto v1 = CreateVolume();
+  v1->Create("c1")->Create("c11")->Create("c111");
+  auto c22 = v1->Create("c2")->Create("c22");
+  auto c12 = v1->Find("c1")->Create("c12");
+  auto c1 = v1->Find("c1");
+
+  c1->Open()->Write("name", 1);
+  c22->Open()->Write("name", 22);
+  c12->Open()->Write("name", 12);
+
+  std::stringstream stream;
+  Save(v1, stream);
+
+  auto v2 = CreateVolume();
+  Load(v2, stream);
+
+  ASSERT_TRUE(v2->Find("c1"));
+  ASSERT_TRUE(v2->Find("c1")->Find("c11"));
+  ASSERT_TRUE(v2->Find("c1")->Find("c11")->Find("c111"));
+  ASSERT_TRUE(v2->Find("c1")->Find("c12"));
+  ASSERT_TRUE(v2->Find("c2"));
+  ASSERT_TRUE(v2->Find("c2")->Find("c22"));
+
+  EXPECT_EQ(v2->Find("c1")->Open()->Read<int>("name"), 1);
+  EXPECT_EQ(v2->Find("c1")->Find("c12")->Open()->Read<int>("name"), 12);
+  EXPECT_EQ(v2->Find("c2")->Find("c22")->Open()->Read<int>("name"), 22);
+}
+
+TEST(VolumeNode, SaveLoadNullThrows) {
+  std::stringstream stream;
+  EXPECT_THROW(Save(nullptr, stream), std::exception);
+  EXPECT_THROW(Load(nullptr, stream), std::exception);
+}
+
 TEST(StorageNode, MountsVolumeNodes) {
   auto v1 = CreateVolume();
   v1->Create("first");
@@ -247,6 +349,14 @@ TEST(StorageNode, MountsVolumeNodes) {
 
   EXPECT_TRUE(s2->Find("first")->IsValid());
   EXPECT_TRUE(s2->Find("second")->IsValid());
+}
+
+TEST(StorageNode, MountNullThrows) {
+  EXPECT_THROW(MountStorage(nullptr), std::exception);
+
+  auto v = CreateVolume();
+  auto s = MountStorage(v);
+  EXPECT_THROW({ auto m = s->Mount(nullptr); }, std::exception);
 }
 
 TEST(StorageNode, CreateUseExisting) {
@@ -371,6 +481,20 @@ TEST(StorageNode, EnumerateAggregation) {
   EXPECT_EQ(d->Read<int>("num2"), 2);
 }
 
+TEST(StorageNode, FindInvalid) {
+  auto v = CreateVolume();
+  auto s = MountStorage(v);
+  auto c = s->Find("child");
+  EXPECT_FALSE(c->IsValid());
+  EXPECT_THROW(c->Find("smth"), std::exception);
+  EXPECT_THROW(c->Create("smth"), std::exception);
+  EXPECT_THROW(c->Enumerate(), std::exception);
+  EXPECT_THROW(c->GetName(), std::exception);
+  EXPECT_THROW(c->Open(), std::exception);
+  EXPECT_THROW(c->Unlink("smth"), std::exception);
+  EXPECT_THROW({ auto m = c->Mount(v); }, std::exception);
+}
+
 TEST(StorageNodeData, ValueSideEffects) {
   auto v = CreateVolume();
   v->Open()->Write("num", 34);
@@ -453,72 +577,4 @@ TEST(StorageNodeData, EnumerateValues) {
   EXPECT_EQ(*kv[0].second.Try<int>(), 1);
   EXPECT_EQ(kv[1].first, "num2");
   EXPECT_EQ(*kv[1].second.Try<int>(), 2);
-}
-
-TEST(VolumeNode, SaveLoadDataInMemory) {
-  auto v = CreateVolume();
-  auto d = v->Open();
-  d->Write("bool", true);
-  d->Write("char", 'y');
-  d->Write("unsigned char", (unsigned char)'h');
-  d->Write("int16", (int16_t)-32);
-  d->Write("uint16", (uint16_t)48);
-  d->Write("int32", (int32_t)-35000);
-  d->Write("uint32", (uint32_t)10004);
-  d->Write("int64", (int64_t)-10000000);
-  d->Write("uin64", (uint64_t)1000456);
-  d->Write("float", 23.567f);
-  d->Write("double", 1234.567678);
-  d->Write("string", "Ю");
-  d->Write("blob", Value::Blob{1, 2, 3, 4});
-
-  std::stringstream stream;
-  Save(v, stream);
-
-  auto v2 = CreateVolume();
-  Load(v2, stream);
-  auto d2 = v2->Open();
-  EXPECT_EQ(d2->Read<bool>("bool"), true);
-  EXPECT_EQ(d2->Read<char>("char"), 'y');
-  EXPECT_EQ(d2->Read<unsigned char>("unsigned char"), 'h');
-  EXPECT_EQ(d2->Read<int16_t>("int16"), -32);
-  EXPECT_EQ(d2->Read<uint16_t>("uint16"), 48);
-  EXPECT_EQ(d2->Read<int32_t>("int32"), -35000);
-  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004);
-  EXPECT_EQ(d2->Read<int64_t>("int64"), -10000000);
-  EXPECT_EQ(d2->Read<uint64_t>("uin64"), 1000456);
-  EXPECT_DOUBLE_EQ(*d2->Read<float>("float"), 23.567f);
-  EXPECT_DOUBLE_EQ(*d2->Read<double>("double"), 1234.567678);
-  EXPECT_EQ(d2->Read<Value::String>("string"), "Ю");
-  EXPECT_EQ(d2->Read<Value::Blob>("blob"), (Value::Blob{1, 2, 3, 4}));
-  EXPECT_EQ(d2->Read<uint32_t>("uint32"), 10004u);
-}
-
-TEST(VolumeNode, SaveLoadHierarchyInMemory) {
-  auto v1 = CreateVolume();
-  v1->Create("c1")->Create("c11")->Create("c111");
-  auto c22 = v1->Create("c2")->Create("c22");
-  auto c12 = v1->Find("c1")->Create("c12");
-  auto c1 = v1->Find("c1");
-
-  c1->Open()->Write("name", 1);
-  c22->Open()->Write("name", 22);
-  c12->Open()->Write("name", 12);
-
-  std::stringstream stream;
-  Save(v1, stream);
-
-  auto v2 = CreateVolume();
-  Load(v2, stream);
-
-  ASSERT_TRUE(v2->Find("c1"));
-  ASSERT_TRUE(v2->Find("c1")->Find("c11"));
-  ASSERT_TRUE(v2->Find("c1")->Find("c11")->Find("c111"));
-  ASSERT_TRUE(v2->Find("c1")->Find("c12"));
-  ASSERT_TRUE(v2->Find("c2"));
-  ASSERT_TRUE(v2->Find("c2")->Find("c22"));
-
-  EXPECT_EQ(v2->Find("c1")->Open()->Read<int>("name"), 1);
-  EXPECT_EQ(v2->Find("c1")->Find("c12")->Open()->Read<int>("name"), 12);
-  EXPECT_EQ(v2->Find("c2")->Find("c22")->Open()->Read<int>("name"), 22);
 }

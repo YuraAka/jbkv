@@ -166,7 +166,6 @@ class NodeData : NonCopyableMovable {
     return Update(key, Value(value));
   }
 
-  /// monadic Read
   template <typename T>
   std::optional<T> Read(const Key& key) {
     const auto value = Read(key);
@@ -201,6 +200,7 @@ class Node : NonCopyableMovable {
   /// @brief Searches node by name amoung children
   /// @return invalid node (IsValid returns false) if node is not found,
   /// otherwise pointer to node
+  /// @note return non-null ptr
   virtual Node::Ptr Find(const Name& name) const = 0;
 
   /// @brief Removes link to child node by name
@@ -209,12 +209,14 @@ class Node : NonCopyableMovable {
   virtual bool Unlink(const Name& name) = 0;
 
   /// @brief List children nodes
+  /// @return return non-null ptr list
   virtual List Enumerate() const = 0;
 
   /// @return name of current node
   virtual const Name& GetName() const = 0;
 
   /// @brief Retrieves data for current node
+  /// @return return non-null ptr
   virtual NodeData::Ptr Open() const = 0;
 
   /// Returns false if node not exist, otherwise true
@@ -237,19 +239,28 @@ class StorageNode : public Node<StorageNode> {
  public:
   /// @brief Mounts current node with subtree with root in given node
   /// @param node root of subtree to link
-  /// @return new node with top-layer as given node
+  /// @return new node with top-layer as given node, guaranteed to be non-null
   /// @note mount will be valid and globally visible for all result life
   /// @note mount does not make side-effects to current node
   [[nodiscard]] virtual Ptr Mount(const VolumeNode::Ptr& node) const = 0;
 };
 
+/// Creates empty volume
+/// @return non-null volume ptr
 VolumeNode::Ptr CreateVolume();
+
+/// Mounts storage to given volume node
+/// @return non-null storage-node
+/// @note mount effect is for life-time of returned node
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
 
+/// Serialization/deserialization
+/// @{
 void Save(const VolumeNode::Ptr& root, std::ostream& stream);
 void Load(const VolumeNode::Ptr& root, std::istream& stream);
 
 void Save(const VolumeNode::Ptr& root, const std::filesystem::path& path);
 void Load(const VolumeNode::Ptr& root, const std::filesystem::path& path);
+/// @}
 
 }  // namespace jbkv
