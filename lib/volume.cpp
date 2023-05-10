@@ -510,6 +510,16 @@ void Check(std::ios& stream) {
   }
 }
 
+size_t ConvertSize(uint64_t size) {
+  if constexpr (sizeof(size_t) != sizeof(size)) {
+    if (size > std::numeric_limits<size_t>::max()) {
+      throw std::runtime_error("Size is too big");
+    }
+  }
+
+  return static_cast<size_t>(size);
+}
+
 void SerializeHeader(std::ostream& out) {
   Check(out.write(kMagic.data(), kMagic.size()));
   Check(out.write(reinterpret_cast<const char*>(&kFormatVersion),
@@ -532,8 +542,9 @@ void Deserialize(std::string& value, std::istream& in) {
   uint64_t size = 0;
   Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
 
-  value.resize(size);
-  Check(in.read(&value[0], size));
+  const auto native_size = ConvertSize(size);
+  value.resize(native_size);
+  Check(in.read(&value[0], native_size));
 }
 
 void Serialize(const Value::String& value, std::ostream& out) {
@@ -553,8 +564,10 @@ void Serialize(const Value::Blob& value, std::ostream& out) {
 void Deserialize(Value::Blob& value, std::istream& in) {
   uint64_t size = 0;
   Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
-  value.Ref().resize(size);
-  Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), size));
+
+  const auto native_size = ConvertSize(size);
+  value.Ref().resize(native_size);
+  Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), native_size));
 }
 
 template <typename T>
