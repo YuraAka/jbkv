@@ -716,13 +716,8 @@ void CheckSum(const Value& value, uint8_t checksum) {
 
 class VolumeSaver {
  public:
-  explicit VolumeSaver(const std::filesystem::path& path)
-      : stream_(path, std::ios_base::binary) {
-    if (!stream_.is_open()) {
-      throw std::runtime_error("Cannot open file for writing: " +
-                               path.string());
-    }
-
+  explicit VolumeSaver(std::ostream& stream)
+      : stream_(stream) {
     SerializeHeader(stream_);
   }
 
@@ -753,18 +748,13 @@ class VolumeSaver {
   }
 
  private:
-  std::ofstream stream_;
+  std::ostream& stream_;
 };
 
 class VolumeLoader {
  public:
-  explicit VolumeLoader(const std::filesystem::path& path)
-      : stream_(path, std::ios_base::binary) {
-    if (!stream_.is_open()) {
-      throw std::runtime_error("Cannot open file for reading: " +
-                               path.string());
-    }
-
+  explicit VolumeLoader(std::istream& stream)
+      : stream_(stream) {
     std::string magic;
     uint8_t version = 0;
     DeserializeHeader(magic, version, stream_);
@@ -810,7 +800,7 @@ class VolumeLoader {
   }
 
  private:
-  std::ifstream stream_;
+  std::istream& stream_;
 };
 
 template <typename Visitor>
@@ -837,12 +827,38 @@ StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
 
 void jbkv::Save(const VolumeNode::Ptr& root,
                 const std::filesystem::path& path) {
-  VolumeSaver saver(path);
-  Traverse(root, saver);
+  std::ofstream stream(path, std::ios_base::binary);
+  if (!stream.is_open()) {
+    throw std::runtime_error("Cannot open file for writing: " + path.string());
+  }
+
+  Save(root, stream);
 }
 
 void jbkv::Load(const VolumeNode::Ptr& root,
                 const std::filesystem::path& path) {
-  VolumeLoader loader(path);
+  std::ifstream stream(path, std::ios_base::binary);
+  if (!stream.is_open()) {
+    throw std::runtime_error("Cannot open file for reading: " + path.string());
+  }
+
+  Load(root, stream);
+}
+
+void jbkv::Save(const VolumeNode::Ptr& root, std::ostream& stream) {
+  if (!root) {
+    throw std::runtime_error("Unable to save: root is nullptr");
+  }
+
+  VolumeSaver saver(stream);
+  Traverse(root, saver);
+}
+
+void jbkv::Load(const VolumeNode::Ptr& root, std::istream& stream) {
+  if (!root) {
+    throw std::runtime_error("Unable to load: root is nullptr");
+  }
+
+  VolumeLoader loader(stream);
   Traverse(root, loader);
 }

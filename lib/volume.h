@@ -10,6 +10,7 @@
 #include <string>
 #include <variant>
 #include <vector>
+#include <iostream>
 
 namespace jbkv {
 
@@ -244,6 +245,9 @@ class StorageNode : public Node<StorageNode> {
 
 VolumeNode::Ptr CreateVolume();
 StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
+
+void Save(const VolumeNode::Ptr& root, std::ostream& stream);
+void Load(const VolumeNode::Ptr& root, std::istream& stream);
 
 void Save(const VolumeNode::Ptr& root, const std::filesystem::path& path);
 void Load(const VolumeNode::Ptr& root, const std::filesystem::path& path);
