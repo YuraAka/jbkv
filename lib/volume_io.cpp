@@ -1,5 +1,6 @@
 #include "volume_io.h"
 #include <fstream>
+#include <deque>
 
 namespace {
 using namespace jbkv;
