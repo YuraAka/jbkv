@@ -82,7 +82,9 @@ class Value {
       using T = std::remove_cvref_t<decltype(data)>;
       if constexpr (std::is_same_v<T, Value::Blob> ||
                     std::is_same_v<T, Value::String>) {
-        if (data.Ref().size() > std::numeric_limits<uint32_t>::max()) {
+        /// int32_t because of the least of std::streamsize in x86
+        constexpr size_t kNativeLeastMax = std::numeric_limits<int32_t>::max();
+        if (data.Ref().size() > kNativeLeastMax) {
           throw std::runtime_error(
               "Value is too big which drops x86 platform support: " +
               std::to_string(data.Ref().size()));
@@ -114,16 +116,16 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os;
 }
 
-class NonCopyableMovable {
+class NonCopyableNonMovable {
  public:
-  NonCopyableMovable() = default;
-  NonCopyableMovable(const NonCopyableMovable&) = delete;
-  NonCopyableMovable(NonCopyableMovable&&) = delete;
-  NonCopyableMovable& operator=(NonCopyableMovable&&) = delete;
-  NonCopyableMovable& operator=(const NonCopyableMovable&) = delete;
+  NonCopyableNonMovable() = default;
+  NonCopyableNonMovable(const NonCopyableNonMovable&) = delete;
+  NonCopyableNonMovable(NonCopyableNonMovable&&) = delete;
+  NonCopyableNonMovable& operator=(NonCopyableNonMovable&&) = delete;
+  NonCopyableNonMovable& operator=(const NonCopyableNonMovable&) = delete;
 };
 
-class NodeData : NonCopyableMovable {
+class NodeData : NonCopyableNonMovable {
  public:
   using Key = std::string;
   using KeyValueList = std::vector<std::pair<Key, Value>>;
@@ -183,7 +185,7 @@ class NodeData : NonCopyableMovable {
 };
 
 template <typename NodeFamily>
-class Node : NonCopyableMovable {
+class Node : NonCopyableNonMovable {
  public:
   using Name = std::string;
   using Path = std::vector<Name>;
@@ -241,8 +243,23 @@ class StorageNode : public Node<StorageNode> {
   /// @param node root of subtree to link
   /// @return new node with top-layer as given node, guaranteed to be non-null
   /// @note mount will be valid and globally visible for all result life
-  /// @note mount does not make side-effects to current node
-  [[nodiscard]] virtual Ptr Mount(const VolumeNode::Ptr& node) const = 0;
+  /// @note mount does not make side-effects to current node, but does on future
+  /// hierarchy browsing
+  [[nodiscard]] virtual StorageNode::Ptr Mount(VolumeNode::Ptr node) = 0;
+
+ public:
+  [[nodiscard]] StorageNode::Ptr Mount(VolumeNode::List nodes) {
+    if (nodes.empty()) {
+      throw std::runtime_error("Unable to mount zero volumes");
+    }
+
+    StorageNode::Ptr result;
+    for (auto&& node : std::move(nodes)) {
+      result = result ? result->Mount(std::move(node)) : Mount(std::move(node));
+    }
+
+    return result;
+  }
 };
 
 /// Creates empty volume
@@ -252,7 +269,8 @@ VolumeNode::Ptr CreateVolume();
 /// Mounts storage to given volume node
 /// @return non-null storage-node
 /// @note mount effect is for life-time of returned node
-StorageNode::Ptr MountStorage(const VolumeNode::Ptr& node);
+StorageNode::Ptr MountStorage(VolumeNode::Ptr node);
+StorageNode::Ptr MountStorage(VolumeNode::List nodes);
 
 /// Serialization/deserialization
 /// @{

@@ -2,6 +2,7 @@
 ### How to build
 Prerequisites:
 - [CMake](https://cmake.org) installed and added to PATH
+- C++ compiler with C++20 standard support
 
 Tested on:
 - Visual Studio 17 2022

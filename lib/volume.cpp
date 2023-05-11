@@ -18,7 +18,7 @@
 namespace {
 using namespace jbkv;
 
-const std::string kRootName = "/";
+constexpr auto kRootName = "/";
 
 template <typename Parent>
 class InvalidNode : public Parent {
@@ -55,21 +55,19 @@ class InvalidNode : public Parent {
 class NullVolumeNode final : public InvalidNode<VolumeNode> {
  public:
   static VolumeNode::Ptr Instance() {
-    static auto instance = std::make_shared<NullVolumeNode>();
-    return instance;
+    return std::make_shared<NullVolumeNode>();
   }
 };
 
 class NullStorageNode final : public InvalidNode<StorageNode> {
  public:
-  Ptr Mount(const VolumeNode::Ptr&) const override {
+  Ptr Mount(VolumeNode::Ptr) override {
     throw std::runtime_error(kError);
   }
 
  public:
   static StorageNode::Ptr Instance() {
-    static auto instance = std::make_shared<NullStorageNode>();
-    return instance;
+    return std::make_shared<NullStorageNode>();
   }
 };
 
@@ -258,40 +256,19 @@ class VolumeNodeImpl final : public VolumeNode {
   std::unordered_map<Name, Node::Ptr> children_;
 };
 
-class MountPoint : NonCopyableMovable {
+struct MountPoint : NonCopyableNonMovable {
  public:
   using StrongPtr = std::shared_ptr<MountPoint>;
   using WeakPtr = std::weak_ptr<MountPoint>;
-  using Unmounter = std::function<void()>;
 
-  MountPoint(const VolumeNode::Ptr& node, const MountPoint::StrongPtr& next)
-      : node_(node),
-        next_(next) {
+  explicit MountPoint(VolumeNode::Ptr n)
+      : node(std::move(n)) {
   }
 
-  void SetUnmounter(const Unmounter& unmounter) {
-    on_unmount_ = unmounter;
-  }
-
-  VolumeNode::Ptr GetNode() const {
-    return node_;
-  }
-
-  ~MountPoint() {
-    if (on_unmount_) {
-      on_unmount_();
-    }
-  }
-
- private:
-  VolumeNode::Ptr node_;
-  StrongPtr next_;
-  Unmounter on_unmount_;
+  VolumeNode::Ptr node;
 };
 
-class StorageNodeMetadata
-    : NonCopyableMovable,
-      public std::enable_shared_from_this<StorageNodeMetadata> {
+class StorageNodeMetadata : NonCopyableNonMovable {
  public:
   using Ptr = std::shared_ptr<StorageNodeMetadata>;
   using List = std::vector<Ptr>;
@@ -333,22 +310,32 @@ class StorageNodeMetadata
     children_.erase(name);
   }
 
-  void AddMountPoint(const MountPoint::StrongPtr& mount) {
+  MountPoint::StrongPtr AddMountPoint(VolumeNode::Ptr&& node) {
     std::lock_guard lock(mutex_);
-    auto it = mounts_.insert(mounts_.end(), mount);
-    auto self = shared_from_this();
-    mount->SetUnmounter([self, it]() {
-      std::lock_guard lock(self->mutex_);
-      self->mounts_.erase(it);
-    });
+    CleanUpExpired();
+    auto mount = std::make_shared<MountPoint>(std::move(node));
+    mounts_.insert(mounts_.end(), mount);
+    return mount;
   }
 
-  void GetMountPoints(VolumeNode::List& layers) {
+  void ListMountPoints(VolumeNode::List& mounts) const {
     std::shared_lock lock(mutex_);
     for (const auto& mount_ref : mounts_) {
       auto mount = mount_ref.lock();
       if (mount) {
-        layers.push_back(std::move(mount->GetNode()));
+        mounts.push_back(mount->node);
+      }
+    }
+  }
+
+ private:
+  void CleanUpExpired() {
+    auto it = mounts_.begin();
+    while (it != mounts_.end()) {
+      auto locked = it->lock();
+      auto prev_it = it++;
+      if (!locked) {
+        mounts_.erase(prev_it);
       }
     }
   }
@@ -356,34 +343,31 @@ class StorageNodeMetadata
  private:
   const StorageNode::Name name_;
 
-  std::shared_mutex mutex_;
+  mutable std::shared_mutex mutex_;
   std::unordered_map<StorageNode::Name, StorageNodeMetadata::Ptr> children_;
   std::list<MountPoint::WeakPtr> mounts_;
 };
 
 class StorageNodeImpl final : public StorageNode {
  public:
-  StorageNodeImpl(const StorageNodeMetadata::Ptr& meta,
-                  VolumeNode::List&& layers,
-                  MountPoint::StrongPtr&& mount = nullptr)
+  explicit StorageNodeImpl(const StorageNodeMetadata::Ptr& meta,
+                           VolumeNode::List&& layers = {},
+                           MountPoint::StrongPtr&& mount = nullptr)
       : meta_(meta),
         layers_(std::move(layers)),
         mount_(std::move(mount)) {
-    if (mount_) {
-      meta_->AddMountPoint(mount_);
-    }
   }
 
   /// StorageNode interface
  public:
-  Ptr Mount(const VolumeNode::Ptr& node) const override {
+  Ptr Mount(VolumeNode::Ptr node) override {
     if (!node) {
-      throw std::runtime_error("Unable to mount: node is nullptr");
+      throw std::runtime_error("Unable to mount null volume node");
     }
 
-    auto mount = std::make_shared<MountPoint>(node, mount_);
     auto layers = layers_;
     layers.push_back(node);
+    auto mount = meta_->AddMountPoint(std::move(node));
     return std::make_shared<StorageNodeImpl>(meta_, std::move(layers),
                                              std::move(mount));
   }
@@ -418,7 +402,7 @@ class StorageNodeImpl final : public StorageNode {
       }
     }
     auto child_meta = meta_->GetAddChild(name);
-    child_meta->GetMountPoints(child_layers);
+    child_meta->ListMountPoints(child_layers);
     if (child_layers.empty()) {
       meta_->RemoveChild(name);
       return NullStorageNode::Instance();
@@ -451,7 +435,7 @@ class StorageNodeImpl final : public StorageNode {
     result.reserve(name_groups.size());
     for (auto&& [name, layers] : name_groups) {
       auto meta = meta_->GetAddChild(name);
-      meta->GetMountPoints(layers);
+      meta->ListMountPoints(layers);
       auto child =
           std::make_shared<StorageNodeImpl>(std::move(meta), std::move(layers));
       result.push_back(std::move(child));
@@ -510,14 +494,15 @@ void Check(std::ios& stream) {
   }
 }
 
-size_t ConvertSize(uint64_t size) {
-  if constexpr (sizeof(size_t) != sizeof(size)) {
-    if (size > std::numeric_limits<size_t>::max()) {
+std::streamsize ConvertSize(uint64_t size) {
+  if constexpr (sizeof(std::streamsize) < sizeof(size)) {
+    const uint64_t native_max = std::numeric_limits<std::streamsize>::max();
+    if (size > native_max) {
       throw std::runtime_error("Size is too big");
     }
   }
 
-  return static_cast<size_t>(size);
+  return static_cast<std::streamsize>(size);
 }
 
 void SerializeHeader(std::ostream& out) {
@@ -528,14 +513,14 @@ void SerializeHeader(std::ostream& out) {
 
 void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
   magic.resize(kMagic.size());
-  Check(in.read(&magic[0], magic.size()));
+  Check(in.read(&magic[0], ConvertSize(magic.size())));
   Check(in.read(reinterpret_cast<char*>(&version), sizeof(version)));
 }
 
 void Serialize(const std::string& value, std::ostream& out) {
   uint64_t size = value.size();
   Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
-  Check(out.write(value.data(), size));
+  Check(out.write(value.data(), ConvertSize(size)));
 }
 
 void Deserialize(std::string& value, std::istream& in) {
@@ -543,7 +528,7 @@ void Deserialize(std::string& value, std::istream& in) {
   Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
 
   const auto native_size = ConvertSize(size);
-  value.resize(native_size);
+  value.resize(static_cast<size_t>(native_size));
   Check(in.read(&value[0], native_size));
 }
 
@@ -558,7 +543,8 @@ void Deserialize(Value::String& value, std::istream& in) {
 void Serialize(const Value::Blob& value, std::ostream& out) {
   uint64_t size = value.Ref().size();
   Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
-  Check(out.write(reinterpret_cast<const char*>(&value.Ref()[0]), size));
+  Check(out.write(reinterpret_cast<const char*>(&value.Ref()[0]),
+                  ConvertSize(size)));
 }
 
 void Deserialize(Value::Blob& value, std::istream& in) {
@@ -566,7 +552,7 @@ void Deserialize(Value::Blob& value, std::istream& in) {
   Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
 
   const auto native_size = ConvertSize(size);
-  value.Ref().resize(native_size);
+  value.Ref().resize(static_cast<size_t>(native_size));
   Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), native_size));
 }
 
@@ -701,9 +687,6 @@ void Deserialize(std::optional<Value>& value, std::istream& in) {
       value.emplace(std::move(data));
       break;
     }
-    default:
-      throw std::runtime_error("Unknown type marker: " +
-                               std::to_string(static_cast<uint8_t>(marker)));
   };
 }
 
@@ -842,14 +825,14 @@ VolumeNode::Ptr jbkv::CreateVolume() {
   return std::make_shared<VolumeNodeImpl>(kRootName);
 }
 
-StorageNode::Ptr jbkv::MountStorage(const VolumeNode::Ptr& node) {
-  if (!node) {
-    throw std::runtime_error("Unable to mount: node is nullptr");
-  }
+StorageNode::Ptr jbkv::MountStorage(VolumeNode::Ptr node) {
+  return MountStorage(VolumeNode::List{std::move(node)});
+}
 
-  VolumeNode::List nodes{node};
-  const auto meta = StorageNodeMetadata::Create(kRootName);
-  return std::make_shared<StorageNodeImpl>(meta, std::move(nodes));
+StorageNode::Ptr jbkv::MountStorage(VolumeNode::List nodes) {
+  auto meta = StorageNodeMetadata::Create(kRootName);
+  StorageNode::Ptr root = std::make_shared<StorageNodeImpl>(std::move(meta));
+  return root->Mount(std::move(nodes));
 }
 
 void jbkv::Save(const VolumeNode::Ptr& root,

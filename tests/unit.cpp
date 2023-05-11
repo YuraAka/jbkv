@@ -359,6 +359,13 @@ TEST(StorageNode, MountNullThrows) {
   EXPECT_THROW({ auto m = s->Mount(nullptr); }, std::exception);
 }
 
+TEST(StorageNode, MountEmptryThrows) {
+  EXPECT_THROW(MountStorage(VolumeNode::List{}), std::exception);
+
+  auto s = MountStorage(CreateVolume());
+  EXPECT_THROW({ auto m = s->Mount(VolumeNode::List{}); }, std::exception);
+}
+
 TEST(StorageNode, CreateUseExisting) {
   auto v1 = CreateVolume();
   auto v2 = CreateVolume();
@@ -510,7 +517,7 @@ TEST(StorageNodeData, WriteNewToTopLayer) {
   auto v1 = CreateVolume();
   auto v2 = CreateVolume();
 
-  auto s = MountStorage(v1)->Mount(v2);
+  auto s = MountStorage({v1, v2});
   s->Open()->Write("num", 35);
 
   EXPECT_FALSE(v1->Open()->Read("num").has_value());
@@ -524,7 +531,7 @@ TEST(StorageNodeData, Update) {
   v1->Open()->Write("num1", 42);
   v2->Open()->Write("num2", 23);
 
-  auto s = MountStorage(v1)->Mount(v2);
+  auto s = MountStorage({v1, v2});
 
   EXPECT_EQ(s->Open()->Read<int>("num1"), 42);
   EXPECT_EQ(s->Open()->Read<int>("num2"), 23);
@@ -546,7 +553,7 @@ TEST(StorageNodeData, RemoveFromAllLayers) {
   auto v2 = CreateVolume();
   v2->Open()->Write("num", 2);
 
-  auto s = MountStorage(v1)->Mount(v2);
+  auto s = MountStorage({v1, v2});
   EXPECT_EQ(s->Open()->Read<int>("num"), 2);
   EXPECT_TRUE(s->Open()->Remove("num"));
   EXPECT_FALSE(s->Open()->Read("num").has_value());
@@ -563,7 +570,7 @@ TEST(StorageNodeData, EnumerateValues) {
 
   auto v3 = CreateVolume();
 
-  auto s = MountStorage(v1)->Mount(v2)->Mount(v3);
+  auto s = MountStorage({v1, v2, v3});
   auto d = s->Open();
   auto kv = d->Enumerate();
 
