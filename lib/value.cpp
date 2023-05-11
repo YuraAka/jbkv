@@ -1,6 +1,7 @@
 #include "value.h"
 #include <iomanip>
 #include <stdexcept>
+#include <limits>
 
 using namespace jbkv;
 
