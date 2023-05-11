@@ -50,3 +50,9 @@ target_compile_features(functest PRIVATE cxx_std_11)
 add_executable(stresstest tests/stress.cpp)
 target_link_libraries(stresstest ${GTEST_BOTH_LIBRARIES} lib-jbkv gtest_main)
 target_compile_features(stresstest PRIVATE cxx_std_11)
+
+enable_testing()
+add_test(UnitTests bin/unittest)
+add_test(FuncTests bin/functest)
+add_test(StressTests bin/stresstest)
+
