@@ -1,8 +1,8 @@
 @echo off
-rmdir /s /q build
+rmdir /s /q build || exit /b
 mkdir build
 cd build
-cmake ..
-%MSBUILD_DIR%\msbuild jbkv.sln /p:Platform=x64
+cmake .. || exit /b
+%MSBUILD_DIR%\msbuild jbkv.sln /p:Platform=x64 || exit /b
 cd ..
 echo "SUCCESS! Find your binaries in build\bin\Release"
