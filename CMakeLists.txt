@@ -33,8 +33,10 @@ FetchContent_MakeAvailable(googletest)
 include_directories(${GTEST_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(lib-jbkv STATIC
-    lib/volume.cpp
-    lib/volume.h
+    lib/storage_node.cpp
+    lib/value.cpp
+    lib/volume_io.cpp
+    lib/volume_node.cpp
 )
 
 add_executable(unittest tests/unit.cpp)
