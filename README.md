@@ -19,7 +19,7 @@ Tested on:
 
 #### Windows
 ```
-  $ set MSBUILD_DIR=<where-msbuild-located>
+  $ set MSBUILD_DIR=<where-msbuild-located>, ex.: "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin"
   $ build.bat
   $ build\bin\Release\unittest.exe
   $ build\bin\Release\functest.exe
