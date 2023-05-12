@@ -228,16 +228,17 @@ void Deserialize(std::optional<Value>& value, std::istream& in) {
 }
 
 template <typename T>
-  requires(std::is_same_v<T, Value::String> || std::is_same_v<T, Value::Blob>)
-void CheckSum(const T& value, uint8_t& checksum) {
+void CheckSum(const T& value, uint8_t& checksum);
+
+template <typename T>
+void CheckSum(const Referenced<T>& value, uint8_t& checksum) {
   for (const auto c : value.Ref()) {
     checksum ^= c;
   }
 }
 
-template <typename T>
-  requires(std::is_same_v<T, std::string>)
-void CheckSum(const T& value, uint8_t& checksum) {
+template <>
+void CheckSum(const std::string& value, uint8_t& checksum) {
   for (const auto c : value) {
     checksum ^= c;
   }
@@ -251,7 +252,8 @@ void CheckSum(T value, uint8_t& checksum) {
   }
 }
 
-void CheckSum(const Value& value, uint8_t checksum) {
+template <>
+void CheckSum(const Value& value, uint8_t& checksum) {
   value.Accept([&checksum](const auto& data) {
     CheckSum(data, checksum);
   });

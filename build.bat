@@ -4,5 +4,6 @@ mkdir build
 cd build
 cmake .. || exit /b
 %MSBUILD_DIR%\msbuild jbkv.sln /p:Platform=x64 || exit /b
+ctest . || exit /b
 cd ..
 echo "SUCCESS! Find your binaries in build\bin\Release"
