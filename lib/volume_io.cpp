@@ -49,35 +49,25 @@ void SerializeHeader(std::ostream& out) {
                   sizeof(kFormatVersion)));
 }
 
-void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
-  magic.resize(kMagic.size());
-  Check(in.read(&magic[0], ConvertSize(magic.size())));
-  Check(in.read(reinterpret_cast<char*>(&version), sizeof(version)));
+template <typename T>
+void Serialize(const T& value, std::ostream& out) {
+  static_assert(std::is_trivial_v<T>);
+  Check(out.write(reinterpret_cast<const char*>(&value), sizeof(value)));
 }
 
+template <>
 void Serialize(const std::string& value, std::ostream& out) {
   uint64_t size = value.size();
   Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
   Check(out.write(value.data(), ConvertSize(size)));
 }
 
-void Deserialize(std::string& value, std::istream& in) {
-  uint64_t size = 0;
-  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
-
-  const auto native_size = ConvertSize(size);
-  value.resize(static_cast<size_t>(native_size));
-  Check(in.read(&value[0], native_size));
-}
-
+template <>
 void Serialize(const Value::String& value, std::ostream& out) {
   Serialize(value.Ref(), out);
 }
 
-void Deserialize(Value::String& value, std::istream& in) {
-  Deserialize(value.Ref(), in);
-}
-
+template <>
 void Serialize(const Value::Blob& value, std::ostream& out) {
   uint64_t size = value.Ref().size();
   Check(out.write(reinterpret_cast<const char*>(&size), sizeof(size)));
@@ -85,27 +75,7 @@ void Serialize(const Value::Blob& value, std::ostream& out) {
                   ConvertSize(size)));
 }
 
-void Deserialize(Value::Blob& value, std::istream& in) {
-  uint64_t size = 0;
-  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
-
-  const auto native_size = ConvertSize(size);
-  value.Ref().resize(static_cast<size_t>(native_size));
-  Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), native_size));
-}
-
-template <typename T>
-  requires std::is_scalar_v<T>
-void Serialize(T value, std::ostream& out) {
-  Check(out.write(reinterpret_cast<char*>(&value), sizeof(value)));
-}
-
-template <typename T>
-  requires std::is_scalar_v<T>
-void Deserialize(T& value, std::istream& in) {
-  Check(in.read(reinterpret_cast<char*>(&value), sizeof(value)));
-}
-
+template <>
 void Serialize(const Value& value, std::ostream& out) {
   value.Accept([&out](const auto& data) {
     using Type = std::remove_cvref_t<decltype(data)>;
@@ -142,6 +112,45 @@ void Serialize(const Value& value, std::ostream& out) {
     Serialize(data, out);
   });
 }
+
+void DeserializeHeader(std::string& magic, uint8_t& version, std::istream& in) {
+  magic.resize(kMagic.size());
+  Check(in.read(&magic[0], ConvertSize(magic.size())));
+  Check(in.read(reinterpret_cast<char*>(&version), sizeof(version)));
+}
+
+template <typename T>
+void Deserialize(T& value, std::istream& in) {
+  static_assert(std::is_trivial_v<T>);
+  Check(in.read(reinterpret_cast<char*>(&value), sizeof(value)));
+}
+
+template <>
+void Deserialize(std::string& value, std::istream& in) {
+  uint64_t size = 0;
+  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
+
+  const auto native_size = ConvertSize(size);
+  value.resize(static_cast<size_t>(native_size));
+  Check(in.read(&value[0], native_size));
+}
+
+template <>
+void Deserialize(Value::String& value, std::istream& in) {
+  Deserialize(value.Ref(), in);
+}
+
+template <>
+void Deserialize(Value::Blob& value, std::istream& in) {
+  uint64_t size = 0;
+  Check(in.read(reinterpret_cast<char*>(&size), sizeof(size)));
+
+  const auto native_size = ConvertSize(size);
+  value.Ref().resize(static_cast<size_t>(native_size));
+  Check(in.read(reinterpret_cast<char*>(&value.Ref()[0]), native_size));
+}
+
+template <>
 
 void Deserialize(std::optional<Value>& value, std::istream& in) {
   FormatMarker marker;

@@ -5,7 +5,9 @@ if(MSVC)
   add_compile_options(/W4 /WX)
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
-
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-fconcepts)
+  endif()
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
