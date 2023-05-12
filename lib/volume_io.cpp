@@ -2,6 +2,7 @@
 #include <fstream>
 #include <deque>
 #include <limits>
+#include <type_traits>
 
 namespace {
 using namespace jbkv;
@@ -228,7 +229,12 @@ void Deserialize(std::optional<Value>& value, std::istream& in) {
 }
 
 template <typename T>
-void CheckSum(const T& value, uint8_t& checksum);
+void CheckSum(const T& value, uint8_t& checksum) {
+  static_assert(std::is_trivial_v<T>);
+  for (size_t i = 0; i < sizeof(value); ++i) {
+    checksum ^= *(reinterpret_cast<const uint8_t*>(&value) + i);
+  }
+}
 
 template <typename T>
 void CheckSum(const Referenced<T>& value, uint8_t& checksum) {
@@ -241,14 +247,6 @@ template <>
 void CheckSum(const std::string& value, uint8_t& checksum) {
   for (const auto c : value) {
     checksum ^= c;
-  }
-}
-
-template <typename T>
-  requires std::is_scalar_v<T>
-void CheckSum(T value, uint8_t& checksum) {
-  for (size_t i = 0; i < sizeof(value); ++i) {
-    checksum ^= *(reinterpret_cast<uint8_t*>(&value) + i);
   }
 }
 
