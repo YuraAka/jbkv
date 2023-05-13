@@ -1,4 +1,5 @@
 # jbkv
+[![Linux Build Status](https://github.com/YuraAka/jbkv/actions/workflows/cmake.yml/badge.svg)](https://github.com/YuraAka/jbkv/actions/workflows/cmake.yml)
 ### How to build
 Prerequisites:
 - [CMake](https://cmake.org) installed and added to PATH
